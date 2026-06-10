@@ -1,4 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { setStatusBarStyle } from 'expo-status-bar';
+import { Search } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -14,9 +16,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import api from '@/lib/api';
 import { getCachedServingUnits, saveCachedFood, saveCachedServingUnits } from '@/lib/food-cache';
-import { updatePendingLog } from '@/lib/offline-sync';
+import { updatePendingLog, type PendingItem } from '@/lib/offline-sync';
 import { QUANTITY_UNITS } from '@/lib/portion-units';
 import { getRecentFoods, type RecentFood } from '@/lib/recent-foods';
+import { colors, radius, spacing } from '@/lib/theme';
 import { NutritionPreview } from '@/components/nutrition-preview';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -132,6 +135,13 @@ export default function EditMealScreen() {
   const [aiStep, setAiStep] = useState<AiStep>('none');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Dark-themed screen — light status-bar icons while mounted; restore on unmount
+  // (the Diary it returns to re-applies light on focus).
+  useEffect(() => {
+    setStatusBarStyle('light');
+    return () => setStatusBarStyle('dark');
+  }, []);
+
   // On mount: load recent foods and fetch serving units for the current food item.
   // If the current food is in recent foods, its nutrition data is available for the preview.
   useEffect(() => {
@@ -239,7 +249,8 @@ export default function EditMealScreen() {
     setSaveError('');
     setSaving(true);
 
-    const itemPayload: Record<string, unknown> = {
+    // PendingItem covers both the online PUT payload and the offline updatePendingLog call.
+    const itemPayload: PendingItem = {
       food_item_id: item.food_item_id,
       quantity: qty,
       quantity_unit: quantityUnit,
@@ -290,16 +301,19 @@ export default function EditMealScreen() {
             <Text style={styles.backButtonText}>← Back</Text>
           </Pressable>
           <Text style={styles.heading}>Change Food</Text>
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search food (e.g. jollof rice)"
-            placeholderTextColor="#999"
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            autoCapitalize="none"
-            clearButtonMode="while-editing"
-            autoFocus
-          />
+          <View style={styles.searchBox}>
+            <Search color={colors.textMuted} size={18} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search food (e.g. jollof rice)"
+              placeholderTextColor={colors.placeholder}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              autoCapitalize="none"
+              clearButtonMode="while-editing"
+              autoFocus
+            />
+          </View>
           {searchQuery.length > 0 && isShortQuery ? (
             <Text style={styles.searchHint}>Type at least 2 characters to search</Text>
           ) : null}
@@ -311,21 +325,19 @@ export default function EditMealScreen() {
             {recentFoods.length > 0 ? (
               <>
                 <Text style={styles.sectionLabel}>Recent</Text>
-                {recentFoods.map((food, i) => (
-                  <View key={food.id}>
-                    <Pressable
-                      style={({ pressed }) => [styles.foodCard, pressed && styles.pressed]}
-                      onPress={() => handleSelectFood(food as FoodItem)}>
-                      <View style={styles.foodCardLeft}>
-                        <Text style={styles.foodName}>{food.name}</Text>
-                        {food.serving_unit ? (
-                          <Text style={styles.foodUnit}>per {food.serving_unit}</Text>
-                        ) : null}
-                      </View>
-                      <Text style={styles.foodCalories}>{food.calories} kcal</Text>
-                    </Pressable>
-                    {i < recentFoods.length - 1 && <View style={styles.separator} />}
-                  </View>
+                {recentFoods.map((food) => (
+                  <Pressable
+                    key={food.id}
+                    style={({ pressed }) => [styles.foodCard, pressed && styles.pressed]}
+                    onPress={() => handleSelectFood(food as FoodItem)}>
+                    <View style={styles.foodCardLeft}>
+                      <Text style={styles.foodName}>{food.name}</Text>
+                      {food.serving_unit ? (
+                        <Text style={styles.foodUnit}>per {food.serving_unit}</Text>
+                      ) : null}
+                    </View>
+                    <Text style={styles.foodCalories}>{food.calories} kcal</Text>
+                  </Pressable>
                 ))}
               </>
             ) : (
@@ -333,7 +345,7 @@ export default function EditMealScreen() {
             )}
           </ScrollView>
         ) : searchLoading ? (
-          <ActivityIndicator style={{ marginTop: 24 }} color="#2563EB" />
+          <ActivityIndicator style={{ marginTop: 24 }} color={colors.accent} />
         ) : searchError ? (
           <Text style={[styles.error, { margin: 20 }]}>{searchError}</Text>
         ) : foods.length > 0 ? (
@@ -354,7 +366,6 @@ export default function EditMealScreen() {
                 <Text style={styles.foodCalories}>{food.calories} kcal</Text>
               </Pressable>
             )}
-            ItemSeparatorComponent={() => <View style={styles.separator} />}
           />
         ) : aiStep === 'confirm' ? (
           <ScrollView contentContainerStyle={[styles.list, { paddingTop: 16 }]}>
@@ -470,13 +481,13 @@ export default function EditMealScreen() {
           value={quantity}
           onChangeText={setQuantity}
           placeholder="e.g. 2"
-          placeholderTextColor="#999"
+          placeholderTextColor={colors.placeholder}
         />
 
         {/* Serving unit picker — dynamic from API, grouped by type */}
         <Text style={styles.label}>Unit</Text>
         {servingUnitsLoading ? (
-          <ActivityIndicator color="#2563EB" size="small" style={{ alignSelf: 'flex-start' }} />
+          <ActivityIndicator color={colors.accent} size="small" style={{ alignSelf: 'flex-start' }} />
         ) : servingUnits.length > 0 ? (
           <>
             {conventionalUnits.length > 0 && (
@@ -549,7 +560,7 @@ export default function EditMealScreen() {
         <TextInput
           style={[styles.input, styles.notesInput]}
           placeholder="e.g. had it for lunch at work"
-          placeholderTextColor="#999"
+          placeholderTextColor={colors.placeholder}
           value={notes}
           onChangeText={setNotes}
           multiline
@@ -583,122 +594,131 @@ export default function EditMealScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: colors.bg,
   },
   scroll: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
     paddingBottom: 40,
-    gap: 10,
+    gap: spacing.md,
   },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    marginBottom: spacing.sm,
   },
   backButton: {
     width: 60,
   },
   backButtonText: {
-    color: '#2563EB',
+    color: colors.accentSoft,
     fontSize: 15,
   },
   heading: {
     fontSize: 20,
-    fontWeight: 'bold',
+    fontWeight: '700',
+    color: colors.textPrimary,
     textAlign: 'center',
+    letterSpacing: 0.2,
   },
   offlineBanner: {
-    backgroundColor: '#FEF3C7',
-    borderRadius: 8,
-    padding: 10,
+    backgroundColor: colors.warningFill,
+    borderWidth: 1,
+    borderColor: 'rgba(244,184,96,0.4)',
+    borderRadius: radius.md,
+    padding: spacing.md,
   },
   offlineBannerText: {
-    color: '#92400E',
+    color: colors.warning,
     fontSize: 13,
     textAlign: 'center',
   },
   label: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#333',
-    marginTop: 4,
+    color: colors.textMuted,
+    marginTop: spacing.xs,
   },
   unitGroupLabel: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#aaa',
+    color: colors.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 0.4,
-    marginTop: 4,
+    marginTop: spacing.xs,
     marginBottom: 2,
   },
   chipRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: spacing.sm,
   },
   chip: {
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 20,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    borderColor: colors.inputBorder,
+    backgroundColor: colors.elevated,
+    borderRadius: radius.pill,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
   },
   chipSelected: {
-    backgroundColor: '#2563EB',
-    borderColor: '#2563EB',
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
   },
   chipText: {
     fontSize: 13,
-    color: '#333',
+    color: colors.textPrimary,
   },
   chipTextSelected: {
     color: '#fff',
+    fontWeight: '600',
   },
   selectedCard: {
-    backgroundColor: '#EFF6FF',
-    borderRadius: 10,
-    padding: 14,
-    gap: 8,
+    backgroundColor: colors.accentFill,
+    borderWidth: 1,
+    borderColor: 'rgba(139,128,249,0.35)',
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    gap: spacing.sm,
   },
   selectedName: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#1e3a5f',
+    color: colors.textPrimary,
   },
   changeButton: {
     alignSelf: 'flex-start',
     borderWidth: 1,
-    borderColor: '#2563EB',
-    borderRadius: 6,
+    borderColor: colors.accent,
+    borderRadius: radius.sm,
     paddingHorizontal: 12,
-    paddingVertical: 5,
+    paddingVertical: 6,
   },
   changeButtonText: {
-    color: '#2563EB',
+    color: colors.accentSoft,
     fontSize: 13,
     fontWeight: '600',
   },
   input: {
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 8,
-    padding: 10,
+    borderColor: colors.inputBorder,
+    backgroundColor: colors.inputBg,
+    borderRadius: radius.sm,
+    padding: spacing.md,
     fontSize: 15,
-    color: '#000',
+    color: colors.textPrimary,
   },
   notesInput: {
     minHeight: 70,
     textAlignVertical: 'top',
   },
   primaryButton: {
-    backgroundColor: '#2563EB',
-    borderRadius: 8,
+    backgroundColor: colors.accent,
+    borderRadius: radius.md,
     padding: 14,
     alignItems: 'center',
-    marginTop: 8,
+    marginTop: spacing.sm,
   },
   primaryButtonText: {
     color: '#fff',
@@ -707,61 +727,75 @@ const styles = StyleSheet.create({
   },
   ghostButton: {
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 8,
+    borderColor: colors.border,
+    borderRadius: radius.md,
     padding: 14,
     alignItems: 'center',
   },
   ghostButtonText: {
-    color: '#555',
+    color: colors.textMuted,
     fontSize: 15,
   },
   error: {
-    color: '#c0392b',
+    color: colors.danger,
     fontSize: 13,
     textAlign: 'center',
   },
   pressed: {
-    opacity: 0.7,
+    opacity: 0.6,
   },
   // Food picker styles
   pickerHeader: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    gap: 10,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+    gap: spacing.md,
+  },
+  searchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.inputBg,
+    borderWidth: 1,
+    borderColor: colors.inputBorder,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
   },
   searchInput: {
-    borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 8,
-    padding: 10,
+    flex: 1,
+    paddingVertical: 11,
     fontSize: 15,
-    color: '#000',
+    color: colors.textPrimary,
   },
   searchHint: {
     fontSize: 12,
-    color: '#aaa',
+    color: colors.textMuted,
     marginTop: -4,
   },
   list: {
-    paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
     paddingBottom: 40,
   },
   sectionLabel: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#aaa',
+    color: colors.textMuted,
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 6,
-    marginTop: 4,
+    letterSpacing: 0.8,
+    marginBottom: spacing.sm,
+    marginTop: spacing.xs,
   },
   foodCard: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 12,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingVertical: 14,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.sm,
   },
   foodCardLeft: {
     flex: 1,
@@ -769,38 +803,34 @@ const styles = StyleSheet.create({
   },
   foodName: {
     fontSize: 15,
-    color: '#111',
+    color: colors.textPrimary,
   },
   foodUnit: {
     fontSize: 12,
-    color: '#888',
+    color: colors.textMuted,
   },
   foodCalories: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#2563EB',
-    marginLeft: 8,
-  },
-  separator: {
-    height: 1,
-    backgroundColor: '#F0F0F0',
+    color: colors.accentSoft,
+    marginLeft: spacing.sm,
   },
   emptyText: {
     textAlign: 'center',
-    color: '#aaa',
+    color: colors.textMuted,
     marginTop: 40,
     fontSize: 14,
   },
   noResultsText: {
     textAlign: 'center',
-    color: '#555',
+    color: colors.textMuted,
     fontSize: 14,
-    marginBottom: 16,
+    marginBottom: spacing.lg,
   },
   aiButton: {
-    backgroundColor: '#7C3AED',
-    borderRadius: 8,
-    padding: 12,
+    backgroundColor: colors.accent,
+    borderRadius: radius.md,
+    padding: spacing.md,
     alignItems: 'center',
     marginHorizontal: 40,
   },
@@ -810,44 +840,46 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   aiCard: {
-    backgroundColor: '#F5F3FF',
-    borderRadius: 10,
-    padding: 16,
-    gap: 12,
+    backgroundColor: colors.accentFill,
+    borderWidth: 1,
+    borderColor: 'rgba(139,128,249,0.4)',
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    gap: spacing.md,
   },
   aiCardTitle: {
     fontSize: 15,
     fontWeight: '700',
-    color: '#5B21B6',
+    color: colors.accentSoft,
   },
   aiCardBody: {
     fontSize: 14,
-    color: '#4C1D95',
+    color: colors.textPrimary,
     lineHeight: 20,
   },
   aiCardRow: {
     flexDirection: 'row',
-    gap: 10,
+    gap: spacing.md,
   },
   aiCancelButton: {
     flex: 1,
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 8,
-    paddingVertical: 10,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    paddingVertical: spacing.md,
     alignItems: 'center',
-    backgroundColor: '#fff',
+    backgroundColor: colors.elevated,
   },
   aiCancelText: {
-    color: '#333',
+    color: colors.textPrimary,
     fontWeight: '600',
     fontSize: 14,
   },
   aiConfirmButton: {
     flex: 1,
-    backgroundColor: '#7C3AED',
-    borderRadius: 8,
-    paddingVertical: 10,
+    backgroundColor: colors.accent,
+    borderRadius: radius.sm,
+    paddingVertical: spacing.md,
     alignItems: 'center',
   },
   aiConfirmText: {

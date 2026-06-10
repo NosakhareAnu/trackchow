@@ -1,18 +1,23 @@
 import { Link, useRouter } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
+import { LogIn, Lock, Mail, Utensils } from 'lucide-react-native';
 import { useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import api from '@/lib/api';
 import { saveToken, saveUser, StoredUser } from '@/lib/auth-storage';
+import { colors, radius, spacing } from '@/lib/theme';
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -48,108 +53,195 @@ export default function LoginScreen() {
   }
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-      <View style={styles.inner}>
-        <Text style={styles.title}>TrackChow</Text>
-        <Text style={styles.subtitle}>Log in to your account</Text>
+    <SafeAreaView style={styles.container}>
+      <StatusBar style="light" />
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}>
 
-        <TextInput
-          style={styles.input}
-          placeholder="Email"
-          placeholderTextColor="#999"
-          autoCapitalize="none"
-          keyboardType="email-address"
-          value={email}
-          onChangeText={setEmail}
-        />
+          {/* Brand */}
+          <View style={styles.brandMark}>
+            <Utensils color={colors.accentSoft} size={26} />
+          </View>
+          <Text style={styles.title}>TrackChow</Text>
+          <Text style={styles.subtitle}>Track your meals, calories, and local foods.</Text>
 
-        <TextInput
-          style={styles.input}
-          placeholder="Password"
-          placeholderTextColor="#999"
-          secureTextEntry
-          value={password}
-          onChangeText={setPassword}
-        />
+          {/* Auth card */}
+          <View style={styles.card}>
+            <View style={styles.inputWrap}>
+              <Mail color={colors.textMuted} size={18} />
+              <TextInput
+                style={styles.input}
+                placeholder="Email"
+                placeholderTextColor={colors.placeholder}
+                autoCapitalize="none"
+                keyboardType="email-address"
+                value={email}
+                onChangeText={setEmail}
+              />
+            </View>
 
-        {error ? <Text style={styles.error}>{error}</Text> : null}
+            <View style={styles.inputWrap}>
+              <Lock color={colors.textMuted} size={18} />
+              <TextInput
+                style={styles.input}
+                placeholder="Password"
+                placeholderTextColor={colors.placeholder}
+                secureTextEntry
+                value={password}
+                onChangeText={setPassword}
+              />
+            </View>
 
-        <Pressable
-          style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
-          onPress={handleLogin}
-          disabled={loading}>
-          {loading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.buttonText}>Log In</Text>
-          )}
-        </Pressable>
+            {error ? (
+              <View style={styles.errorCard}>
+                <Text style={styles.errorText}>{error}</Text>
+              </View>
+            ) : null}
 
-        <Link href="/(auth)/register" style={styles.link}>
-          Don't have an account? Register
-        </Link>
-      </View>
-    </KeyboardAvoidingView>
+            <Pressable
+              style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
+              onPress={handleLogin}
+              disabled={loading}>
+              {loading ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <View style={styles.buttonContent}>
+                  <LogIn color="#fff" size={18} />
+                  <Text style={styles.buttonText}>Log In</Text>
+                </View>
+              )}
+            </Pressable>
+          </View>
+
+          {/* Switch to register */}
+          <View style={styles.linkRow}>
+            <Text style={styles.linkMuted}>Don&apos;t have an account? </Text>
+            <Link href="/(auth)/register" style={styles.linkAccent}>
+              Register
+            </Link>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: colors.bg,
   },
-  inner: {
+  flex: {
     flex: 1,
+  },
+  scroll: {
+    flexGrow: 1,
     justifyContent: 'center',
-    paddingHorizontal: 24,
-    gap: 12,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: 32,
+  },
+  brandMark: {
+    alignSelf: 'center',
+    width: 56,
+    height: 56,
+    borderRadius: radius.lg,
+    backgroundColor: colors.accentFill,
+    borderWidth: 1,
+    borderColor: 'rgba(139,128,249,0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing.md,
   },
   title: {
-    fontSize: 28,
-    fontWeight: 'bold',
+    fontSize: 30,
+    fontWeight: '700',
+    color: colors.textPrimary,
     textAlign: 'center',
-    marginBottom: 4,
+    letterSpacing: 0.3,
+    marginBottom: spacing.xs,
   },
   subtitle: {
-    fontSize: 16,
-    color: '#555',
+    fontSize: 14,
+    color: colors.textMuted,
     textAlign: 'center',
-    marginBottom: 8,
+    marginBottom: spacing.xl,
+    lineHeight: 20,
+  },
+  card: {
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.xl,
+    padding: spacing.lg,
+    gap: spacing.md,
+  },
+  inputWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.inputBg,
+    borderWidth: 1,
+    borderColor: colors.inputBorder,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
   },
   input: {
-    borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-    color: '#000',
+    flex: 1,
+    paddingVertical: 13,
+    fontSize: 15,
+    color: colors.textPrimary,
   },
-  error: {
-    color: '#c0392b',
-    fontSize: 14,
+  errorCard: {
+    backgroundColor: colors.dangerFill,
+    borderWidth: 1,
+    borderColor: 'rgba(224,106,106,0.4)',
+    borderRadius: radius.md,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
+  errorText: {
+    color: colors.danger,
+    fontSize: 13,
     textAlign: 'center',
   },
   button: {
-    backgroundColor: '#2563EB',
-    borderRadius: 8,
+    backgroundColor: colors.accent,
+    borderRadius: radius.md,
     padding: 14,
     alignItems: 'center',
-    marginTop: 4,
+    marginTop: spacing.xs,
   },
   buttonPressed: {
-    opacity: 0.8,
+    opacity: 0.85,
+  },
+  buttonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
   },
   buttonText: {
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
   },
-  link: {
-    color: '#2563EB',
-    textAlign: 'center',
-    marginTop: 8,
+  linkRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: spacing.xl,
+  },
+  linkMuted: {
+    color: colors.textMuted,
     fontSize: 14,
+  },
+  linkAccent: {
+    color: colors.accentSoft,
+    fontSize: 14,
+    fontWeight: '600',
   },
 });

@@ -1,4 +1,5 @@
 import { useFocusEffect } from 'expo-router';
+import { setStatusBarStyle } from 'expo-status-bar';
 import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
@@ -14,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import api from '@/lib/api';
 import { getCachedServingUnits, saveCachedFood, saveCachedServingUnits } from '@/lib/food-cache';
 import { QUANTITY_UNITS } from '@/lib/portion-units';
+import { colors, radius, spacing } from '@/lib/theme';
 import { NutritionPreview } from '@/components/nutrition-preview';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -22,7 +24,7 @@ type FoodItem = {
   id: string;
   name: string;
   category?: string | null;
-  serving_unit?: string | null;
+  serving_unit: string | null;
   calories: number;
   carbs_g: number;
   protein_g: number;
@@ -129,7 +131,10 @@ export default function TemplatesScreen() {
   // Reload templates when tab gains focus
   useFocusEffect(
     useCallback(() => {
+      // Dark-themed screen — light status-bar icons while focused; restore on blur.
+      setStatusBarStyle('light');
       fetchTemplates();
+      return () => setStatusBarStyle('dark');
     }, [])
   );
 
@@ -286,7 +291,7 @@ export default function TemplatesScreen() {
           <TextInput
             style={styles.searchInput}
             placeholder="Search food..."
-            placeholderTextColor="#999"
+            placeholderTextColor={colors.placeholder}
             value={foodSearch}
             onChangeText={(text) => {
               setFoodSearch(text);
@@ -296,7 +301,7 @@ export default function TemplatesScreen() {
           />
         </View>
 
-        {foodsLoading && <ActivityIndicator style={{ marginTop: 20 }} color="#2563EB" />}
+        {foodsLoading && <ActivityIndicator style={{ marginTop: 20 }} color={colors.accent} />}
         {foodsError ? <Text style={[styles.error, { margin: 20 }]}>{foodsError}</Text> : null}
 
         <ScrollView contentContainerStyle={styles.foodList}>
@@ -339,7 +344,7 @@ export default function TemplatesScreen() {
           <TextInput
             style={styles.input}
             placeholder="e.g. My Breakfast"
-            placeholderTextColor="#999"
+            placeholderTextColor={colors.placeholder}
             value={templateName}
             onChangeText={setTemplateName}
           />
@@ -374,13 +379,13 @@ export default function TemplatesScreen() {
             value={quantity}
             onChangeText={setQuantity}
             placeholder="e.g. 1"
-            placeholderTextColor="#999"
+            placeholderTextColor={colors.placeholder}
           />
 
           {/* Serving unit picker — dynamic from API, grouped by type */}
           <Text style={styles.label}>Unit</Text>
           {servingUnitsLoading ? (
-            <ActivityIndicator color="#2563EB" size="small" style={{ alignSelf: 'flex-start' }} />
+            <ActivityIndicator color={colors.accent} size="small" style={{ alignSelf: 'flex-start' }} />
           ) : servingUnits.length > 0 ? (
             <>
               {conventionalUnits.length > 0 && (
@@ -497,7 +502,7 @@ export default function TemplatesScreen() {
 
         {logError ? <Text style={styles.error}>{logError}</Text> : null}
 
-        {listLoading && <ActivityIndicator color="#2563EB" style={{ marginTop: 24 }} />}
+        {listLoading && <ActivityIndicator color={colors.accent} style={{ marginTop: 24 }} />}
         {listError ? <Text style={styles.error}>{listError}</Text> : null}
 
         {!listLoading && templates.length === 0 && !listError && (
@@ -529,7 +534,7 @@ export default function TemplatesScreen() {
                   onPress={() => handleLogTemplate(template.id)}
                   disabled={loggingId === template.id}>
                   {loggingId === template.id ? (
-                    <ActivityIndicator color="#2563EB" size="small" />
+                    <ActivityIndicator color={colors.accent} size="small" />
                   ) : (
                     <Text style={styles.logButtonText}>Log This Meal</Text>
                   )}
@@ -548,32 +553,34 @@ export default function TemplatesScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: colors.bg,
   },
   scroll: {
-    paddingHorizontal: 20,
-    paddingTop: 24,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
     paddingBottom: 40,
-    gap: 10,
+    gap: spacing.md,
   },
   header: {
-    paddingHorizontal: 20,
-    paddingTop: 24,
-    gap: 12,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+    gap: spacing.md,
   },
   headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 4,
+    marginBottom: spacing.xs,
   },
   heading: {
-    fontSize: 22,
-    fontWeight: 'bold',
+    fontSize: 24,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    letterSpacing: 0.2,
   },
   createButton: {
-    backgroundColor: '#2563EB',
-    borderRadius: 8,
+    backgroundColor: colors.accent,
+    borderRadius: radius.sm,
     paddingHorizontal: 14,
     paddingVertical: 8,
   },
@@ -583,10 +590,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   card: {
-    backgroundColor: '#F5F5F7',
-    borderRadius: 10,
-    padding: 14,
-    gap: 6,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    gap: spacing.sm,
   },
   cardHeader: {
     flexDirection: 'row',
@@ -596,129 +605,138 @@ const styles = StyleSheet.create({
   templateName: {
     fontSize: 15,
     fontWeight: '600',
+    color: colors.textPrimary,
   },
   templateType: {
     fontSize: 12,
-    color: '#888',
+    color: colors.textMuted,
     textTransform: 'capitalize',
   },
   templateItem: {
     fontSize: 13,
-    color: '#444',
+    color: colors.textPrimary,
   },
   logButton: {
-    marginTop: 6,
+    marginTop: spacing.xs,
     borderWidth: 1,
-    borderColor: '#2563EB',
-    borderRadius: 8,
-    padding: 10,
+    borderColor: colors.accent,
+    borderRadius: radius.sm,
+    padding: spacing.md,
     alignItems: 'center',
   },
   logButtonText: {
-    color: '#2563EB',
+    color: colors.accentSoft,
     fontWeight: '600',
     fontSize: 13,
   },
   label: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#333',
-    marginTop: 4,
+    color: colors.textMuted,
+    marginTop: spacing.xs,
   },
   unitGroupLabel: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#aaa',
+    color: colors.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 0.4,
-    marginTop: 4,
+    marginTop: spacing.xs,
     marginBottom: 2,
   },
   input: {
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 8,
-    padding: 10,
+    borderColor: colors.inputBorder,
+    backgroundColor: colors.inputBg,
+    borderRadius: radius.sm,
+    padding: spacing.md,
     fontSize: 15,
-    color: '#000',
+    color: colors.textPrimary,
   },
   searchInput: {
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 8,
-    padding: 10,
+    borderColor: colors.inputBorder,
+    backgroundColor: colors.inputBg,
+    borderRadius: radius.sm,
+    padding: spacing.md,
     fontSize: 15,
-    color: '#000',
+    color: colors.textPrimary,
   },
   chipRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: spacing.sm,
   },
   chip: {
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 20,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    borderColor: colors.inputBorder,
+    backgroundColor: colors.elevated,
+    borderRadius: radius.pill,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
   },
   chipSelected: {
-    backgroundColor: '#2563EB',
-    borderColor: '#2563EB',
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
   },
   chipText: {
     fontSize: 13,
-    color: '#333',
+    color: colors.textPrimary,
   },
   chipTextSelected: {
     color: '#fff',
+    fontWeight: '600',
   },
   foodPickerButton: {
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 8,
-    padding: 12,
+    borderColor: colors.inputBorder,
+    backgroundColor: colors.inputBg,
+    borderRadius: radius.sm,
+    padding: spacing.md,
   },
   foodPickerPlaceholder: {
-    color: '#999',
+    color: colors.placeholder,
     fontSize: 15,
   },
   foodPickerSelected: {
-    color: '#000',
+    color: colors.textPrimary,
     fontSize: 15,
     fontWeight: '500',
   },
   foodList: {
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 20,
-    gap: 2,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.lg,
+    gap: spacing.sm,
   },
   foodRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingVertical: 14,
+    paddingHorizontal: spacing.md,
   },
   foodName: {
     fontSize: 15,
     flex: 1,
-    color: '#111',
+    color: colors.textPrimary,
   },
   foodCalories: {
     fontSize: 13,
-    color: '#2563EB',
+    color: colors.accentSoft,
     fontWeight: '600',
-    marginLeft: 8,
+    marginLeft: spacing.sm,
   },
   primaryButton: {
-    backgroundColor: '#2563EB',
-    borderRadius: 8,
+    backgroundColor: colors.accent,
+    borderRadius: radius.md,
     padding: 14,
     alignItems: 'center',
-    marginTop: 8,
+    marginTop: spacing.sm,
   },
   primaryButtonText: {
     color: '#fff',
@@ -727,32 +745,32 @@ const styles = StyleSheet.create({
   },
   ghostButton: {
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 8,
+    borderColor: colors.border,
+    borderRadius: radius.md,
     padding: 14,
     alignItems: 'center',
   },
   ghostButtonText: {
-    color: '#555',
+    color: colors.textMuted,
     fontSize: 15,
   },
   error: {
-    color: '#c0392b',
+    color: colors.danger,
     fontSize: 13,
     textAlign: 'center',
   },
   successText: {
-    color: '#16a34a',
+    color: colors.success,
     fontSize: 13,
     textAlign: 'center',
   },
   emptyText: {
-    color: '#aaa',
+    color: colors.textMuted,
     fontSize: 14,
     textAlign: 'center',
     marginTop: 32,
   },
   pressed: {
-    opacity: 0.7,
+    opacity: 0.6,
   },
 });

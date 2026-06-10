@@ -1,6 +1,6 @@
 # TrackChow — Project Handover Status
 
-Last updated: 2026-06-10 (Phase 2.5 user-scoped storage + pending food names; UX nav foundation — flash redirect, Diary|+|Profile nav)
+Last updated: 2026-06-10 (Phase 3B4 — edit-meal dark theme + its TS-only fix; the dark slate-purple theme now covers every screen in the app)
 
 ---
 
@@ -286,17 +286,22 @@ These are snapshotted at creation time from `food_serving_units.grams` so the re
 
 - `_layout.tsx` — root Stack; checks AsyncStorage token on mount; redirects to `/(auth)/login` or `/(tabs)/dashboard`
 - `(auth)/_layout.tsx` — headerless Stack for auth screens
-- `(tabs)/_layout.tsx` — Tabs with Dashboard, Log Meal, Templates
+- `(tabs)/_layout.tsx` — **themed dark tab bar** (Phase 3B1): three visible tabs — Diary, center + button, Profile. Active tint `#8B80F9`, inactive muted, dark surface `#1C2233` with subtle top border; tab bar height accounts for safe-area bottom inset. Log Meal and Templates are `href: null` (hidden, still navigable). The center + button no longer navigates — it opens the **Add popup** (`AddMenuSheet`) over the current screen. **3B2**: tab bar icons via `lucide-react-native` — `CalendarDays` (Diary), `User` (Profile), `Plus` inside the center button.
 
 ### Auth Screens
 
-- `(auth)/login.tsx` — email + password form; calls `POST /auth/login`; saves token + user; redirects to dashboard
-- `(auth)/register.tsx` — full_name + email + password form; calls `POST /auth/register` then auto-logs in; redirects to dashboard
+- **UI: dark slate-purple theme (Phase 3B3)** — both screens use `src/lib/theme.ts`: dark background, a centered auth card, a small brand mark (`Utensils` in an accent tile), mature title + subtitle, rounded inputs with leading icons, themed primary button (with icon), a themed error card, and an accent register/login switch link. `KeyboardAvoidingView` + `ScrollView` (`keyboardShouldPersistTaps="handled"`, centered `flexGrow` content) keep inputs visible above the Android keyboard. `<StatusBar style="light" />` on both. `(auth)/_layout.tsx` sets a dark `contentStyle` to avoid a white flash on login↔register. **No auth logic, validation, loading, or error handling changed.**
+- `(auth)/login.tsx` — email + password form (`Mail`/`Lock` icons, `LogIn` button); title "TrackChow", subtitle "Track your meals, calories, and local foods."; calls `POST /auth/login`; saves token + user; redirects to dashboard
+- `(auth)/register.tsx` — full_name + email + password form (`User`/`Mail`/`Lock` icons, `UserPlus` button); title "Create Account", subtitle "Start tracking your meals with local food support."; calls `POST /auth/register` then auto-logs in; redirects to dashboard
 
-### Dashboard (`(tabs)/dashboard.tsx`)
+### Dashboard / Diary (`(tabs)/dashboard.tsx`)
 
-- Fetches `GET /summary/daily`, `GET /summary/weekly`, `GET /meal-logs/today` in parallel on every tab focus
-- Displays daily macro boxes (calories, carbs, protein, fat)
+- **UI: dark slate-purple theme (Phase 3B1)** — consumes `src/lib/theme.ts` tokens (bg `#141824`, cards `#1C2233`/`#232A3D`, accent `#8B80F9`, soft accent `#A89FFF`, support teal `#63D2C6` small use, success/warning/danger for status). Sets light status-bar icons on focus, restores dark on blur (so the still-light Profile screen stays readable).
+- Fetches `GET /summary/daily`, `GET /summary/weekly`, `GET /meal-logs?date=` + `GET /profile` in parallel on every tab focus
+- **Swipeable nutrition summary** (`NutritionSummary`) — **2 panels** (3B2; was 4) in a horizontal, full-bleed paged `ScrollView` with 2 page dots. Panel 1 = **Calories** (`Gauge` icon): big eaten number, and when a goal is set a thin progress bar + "X of GOAL kcal" / "N left" (or "N over" in amber when exceeded); when no goal it shows "Set a daily calorie goal in Profile". Panel 2 = **Macros** (`Activity` icon): Protein / Carbs / Fat in three columns showing **grams eaten only** (no "/ goal" — the app stores no macro goals). Active page tracked via `onMomentumScrollEnd`.
+- **Compact streak chips** — two slim chips ("Tracking streak", "Goal streak") in a single row below the date header; each with a small `Flame` icon, teal value, muted label. Replaces the old bulky two-column streak card.
+- **Polished date header** — circular ‹ › arrows on an elevated surface; centered date label; tapping the label returns to Today (subtle, only shown/active when not already on today).
+- **Logout moved out** (3B2) — the Log Out button was removed from the Diary; it now lives in an "Account" section at the bottom of Profile.
 - **Nutrition Insight card** — shown directly below the Nutrition summary; rule-based, no AI; uses `generateInsights(daily, calorieGoal, hasLogs)` pure function:
   - No meals logged → "Log a meal to see nutrition insights."
   - Calories > goal → ⚠ "You have passed your calorie goal..." (with numbers)
@@ -317,6 +322,7 @@ These are snapshotted at creation time from `food_serving_units.grams` so the re
 
 ### Log Meal (`(tabs)/log-meal.tsx`)
 
+- **UI: dark slate-purple theme (Phase 3B2)** — themed search box (with a `Search` icon), food results as cards, accent-tinted selected-food and AI cards, pill chips for serving units, themed inputs/buttons, themed `NutritionPreview`. Sets light status-bar icons on focus, dark on blur. No flow/logic changes — search, AI fallback, portion selector, offline save, and the Diary flash-redirect all behave exactly as before.
 - Three-state UI: food search → meal options → success
 - **Phase A food search**: does NOT load all foods on mount; shows up to 5 recent foods from AsyncStorage when query is empty or < 2 chars; fires `GET /foods?search=query` only when query ≥ 2 characters; 400 ms debounce; "Type at least 2 characters to search" hint shown for 1-char input
 - **No-results flow**: "No food found" + purple "Search with AI" button → AI confirmation card ("AI food search will estimate nutrition for…" + Cancel/Continue) → "AI search not connected yet." placeholder; AI step resets whenever query changes
@@ -330,6 +336,7 @@ These are snapshotted at creation time from `food_serving_units.grams` so the re
 
 ### Templates (`(tabs)/templates.tsx`)
 
+- **UI: dark slate-purple theme (Phase 3B2)** — themed list cards, create form, food-picker rows (as cards), pill chips, inputs and buttons; themed `NutritionPreview`. Light status-bar icons on focus, dark on blur. All existing behaviour (create, log-from-template, food picker, serving units) unchanged. Also fixed a pre-existing TS-only error here: `FoodItem.serving_unit` is now `string | null` (was optional), matching `log-meal.tsx` and `CachedFood`.
 - Three-state UI: list → create → food picker
 - Create: template name, meal type, one food item (from food picker), quantity, quantity unit
 - **Dynamic serving unit chips** — same behaviour as Log Meal: fetches `GET /foods/:id/serving-units` when a food is selected; groups units into Conventional / Unconventional; auto-selects default; falls back to static chips
@@ -341,6 +348,8 @@ These are snapshotted at creation time from `food_serving_units.grams` so the re
 
 ### Profile (`(tabs)/profile.tsx`)
 
+- **UI: dark slate-purple theme (Phase 3B2)** — themed streak boxes (with `Flame` icons), section labels (Details / Account), themed inputs, read-only email, goal-change warning card, and Save button. Light status-bar icons on focus, dark on blur.
+- **Logout lives here now (Phase 3B2)** — an "Account" section at the bottom with a `LogOut`-icon danger button; clears auth token/user and redirects to `/(auth)/login`. (Moved from the Diary.)
 - Fetches `GET /profile` on every tab focus
 - Shows tracking streak and goal streak as stat boxes at the top
 - Displays email as read-only
@@ -352,6 +361,7 @@ These are snapshotted at creation time from `food_serving_units.grams` so the re
 
 ### Lib
 
+- `src/lib/theme.ts` — **shared dark theme tokens**: `colors`, `spacing`, `radius`. One theme — desaturated slate-purple. **3B2**: added `inputBg`, `inputBorder`, `placeholder` tokens for form fields. Consumed by **every screen** as of 3B4: Diary, bottom nav, Log Meal, Templates, Profile, the Add popup, `NutritionPreview`, the auth screens (login/register), and `edit-meal.tsx`. No light screens remain.
 - `src/lib/api.ts` — axios instance; `BASE_URL = 'http://10.203.208.196:5000'` (physical Android via Expo Go — change to `localhost:5000` for Expo web, `10.0.2.2:5000` for Android emulator); request interceptor attaches Bearer token automatically
 - `src/lib/auth-storage.ts` — `saveToken`, `getToken`, `saveUser`, `getUser`, `clearAuth` (uses `removeItem` × 2, not `multiRemove` — v3 fix)
 - `src/lib/offline-sync.ts` — `savePendingLog`, `getPendingLogs`, `getPendingCount`, `removeSyncedLogs`, `deletePendingLog`, `updatePendingLog`
@@ -361,6 +371,7 @@ These are snapshotted at creation time from `food_serving_units.grams` so the re
 
 ### Components
 
+- `src/components/add-menu-sheet.tsx` — **Add popup action menu (Phase 3B1)**. Bottom-sheet style modal opened by the center + tab button. Shows exactly two options: **Log Meal** and **Templates** (each `router.push`es the hidden route, then closes). Uses core React Native `Animated` (no reanimated dependency) for a subtle fade-backdrop + slide-up; keeps the modal mounted through the closing animation via a `rendered` flag. Dark themed, safe-area aware.
 - `src/components/nutrition-preview.tsx` — `NutritionPreview` component; takes `food: NutritionValues | null`, `quantity: number`, `unit: string`, optional `gramsPerUnit: number | null`; preferred path: `total_grams = qty × gramsPerUnit`, `nutrient = (total_grams / 100) × nutrient_per_100g`; subtitle shows "2 plates = 460g" when total grams are computed; falls back to legacy (food.nutrient × qty) when per-100g data or gramsPerUnit is absent; returns null when food is null or quantity ≤ 0; used in log-meal, edit-meal, and templates
 
 ---
@@ -445,6 +456,37 @@ These cannot be verified by code review alone:
 
 ## Completed Since Last Handover
 
+- **Phase 3B4 — Edit Meal dark theme + targeted TS fix**:
+  - `edit-meal.tsx` brought onto the shared dark slate-purple theme, matching `log-meal.tsx`: dark background, themed header ("Edit Meal" / "Change Food"), search box with a `Search` icon, food results as cards (separators removed), pill meal-type & serving-unit chips, accent-tinted selected-food and AI cards, themed inputs + notes field, themed primary/ghost buttons, themed offline banner, and the already-themed `NutritionPreview`. `<StatusBar>` set to light icons while mounted (restored on unmount).
+  - **TS-only fix**: `itemPayload` retyped from `Record<string, unknown>` to `PendingItem` (imported from `offline-sync`) — the same fix already applied to `log-meal.tsx`. Whole-project `tsc --noEmit` is now **clean (0 errors)**.
+  - **No backend / schema / API changes, no behaviour changes.** All preserved: loads existing meal data, shows the selected food, search + serving-unit fetch, offline cached units, g/ml fallback, nutrition preview, change meal type / food / quantity / unit / notes, `PUT /meal-logs/:id` (online) and `updatePendingLog` (offline) save, `router.back()` after save.
+  - **Files changed**: `src/app/edit-meal.tsx`.
+- **Phase 3B3 — Auth screens dark theme polish**:
+  - `login.tsx` and `register.tsx` rebuilt on the shared dark slate-purple theme: dark background, centered auth card, brand mark (`Utensils` in an accent tile), mature title/subtitle, rounded inputs with leading lucide icons (`Mail`/`Lock`/`User`), themed primary button with icon (`LogIn`/`UserPlus`), themed error card (danger fill), and an accent switch link.
+  - Login title "TrackChow" / subtitle "Track your meals, calories, and local foods."; Register title "Create Account" / subtitle "Start tracking your meals with local food support."
+  - `KeyboardAvoidingView` + `ScrollView` so the Android keyboard never hides inputs; `<StatusBar style="light" />` on both; `(auth)/_layout.tsx` sets a dark `contentStyle` to avoid a white flash on login↔register.
+  - **No backend / auth-API / schema changes; no logic, validation, loading, or error-handling changes.** Login, register, and post-register auto-login all behave exactly as before.
+  - Typecheck: zero new errors (all auth icons resolve). The lone pre-existing `edit-meal.tsx:257` TS-only error is untouched.
+  - **Files changed**: `src/app/(auth)/login.tsx`, `src/app/(auth)/register.tsx`, `src/app/(auth)/_layout.tsx`.
+- **Phase 3B2 — UI finishing pass (icons + theme extension, restraint kept)**:
+  - **lucide-react-native icons added** (packages `lucide-react-native` + `react-native-svg` installed). Used sparingly, theme-coloured, no emojis: bottom nav (`CalendarDays`, `User`, `Plus`), Add popup (`Utensils`, `ClipboardList`, `ChevronRight`), Diary calorie panel (`Gauge`), Diary macros panel (`Activity`), streak chips (`Flame`, Diary + Profile), Log Meal search (`Search`), Profile logout (`LogOut`). All icon names typecheck clean.
+  - **Logout moved Diary → Profile**: removed from the Diary bottom; added to a new "Account" section at the bottom of Profile (same logic — `clearAuth` + redirect to login).
+  - **Nutrition summary: 4 panels → 2**: Panel 1 Calories (eaten / goal / progress / remaining-or-over, unchanged design + `Gauge` icon); Panel 2 a single combined **Macros** panel showing Protein / Carbs / Fat grams **eaten only** (three columns, no macro goals — the app stores only `daily_calorie_goal`). Page dots reduced to 2.
+  - **Dark theme extended** to Log Meal, Profile, Templates, the Add popup, and `NutritionPreview` (previously Diary + nav only). Themed inputs (new `inputBg`/`inputBorder`/`placeholder` tokens), pill chips, cards, buttons; each themed tab screen toggles light status-bar icons on focus and restores dark on blur (keeps the still-light `edit-meal`/auth screens readable).
+  - **Add popup polished**: leading icon tiles, `ChevronRight`, more comfortable row height/spacing; same core-`Animated` fade+slide, tap-outside-to-close.
+  - **No backend / schema / API changes. No new flows.** All preserved: login/register, Diary load + date nav + swipe summary, flash banners, pending-sync banner, grouped logs, edit/delete, Log Meal online/offline, AI food search, serving units, nutrition preview, templates, profile save, logout, + popup navigation.
+  - **Typecheck**: introduces zero new TS errors; also fixed one pre-existing error in `templates.tsx` (`FoodItem.serving_unit` now `string | null`). One pre-existing TS-only error remains in the untouched `edit-meal.tsx:257` (left per scope).
+  - **Files changed**: `src/lib/theme.ts`, `src/app/(tabs)/_layout.tsx`, `src/app/(tabs)/dashboard.tsx`, `src/app/(tabs)/profile.tsx`, `src/app/(tabs)/log-meal.tsx`, `src/app/(tabs)/templates.tsx`, `src/components/add-menu-sheet.tsx`, `src/components/nutrition-preview.tsx`.
+- **Phase 3B1 — Diary + navigation UI polish (dark theme, restraint pass)**:
+  - **Shared theme** (`src/lib/theme.ts`): one dark, mature, minimal theme around a desaturated slate-purple. Scoped to the Diary screen + bottom nav for this pass only; Log Meal / Templates / Profile intentionally left on their original light styling.
+  - **Diary screen restyled** (`(tabs)/dashboard.tsx`): dark background and cards, themed typography/spacing, light status-bar icons while focused (restored to dark on blur for the still-light Profile). All existing behaviour preserved — date navigation, focus refresh, flash banners, pending-sync banner + message, grouped meals, online/offline edit & delete, weekly summary, offline meals list, sync buttons, logout.
+  - **New top nutrition summary**: horizontal **swipeable** panels with page dots. Front panel prioritises **calories eaten / goal / remaining** (thin progress bar; amber "over" state; graceful "set a goal" hint when none). Macro panels (protein/carbs/fat) show **grams eaten only** — no invented macro goals, since the DB stores `daily_calorie_goal` only.
+  - **Compact streak**: bulky two-column streak card replaced with two slim themed chips in one row.
+  - **Polished date header**: elevated circular ‹ › arrows; tap the centre label to jump back to Today (subtle, only when not already today). Header kept minimal — no busy date picker.
+  - **Premium bottom nav** (`(tabs)/_layout.tsx`): themed dark surface, subtle top border, purple active tint, raised purple + button; tab bar respects the safe-area bottom inset.
+  - **+ now opens a popup, not a page** (`src/components/add-menu-sheet.tsx`): tapping the center + opens a minimal bottom-sheet action menu (Log Meal, Templates) over the current screen with a short, subtle fade+slide animation (core RN `Animated`, no new dependency). The old full-page `add.tsx` is now an unused/orphaned route (left in place, harmless).
+  - **No new dependencies, no backend/schema/API changes.** Icons (lucide) were intentionally NOT added — adding a native module (`react-native-svg`) couldn't be verified on the physical Android device, and the icon direction was explicitly conditional ("if easy to install"). The premium feel is achieved with colour, typography, spacing, and the raised + button instead. lucide remains an easy future add.
+  - **Files changed**: `src/lib/theme.ts` (new), `src/components/add-menu-sheet.tsx` (new), `src/app/(tabs)/_layout.tsx`, `src/app/(tabs)/dashboard.tsx`. Typecheck clean for all four (two pre-existing TS-only errors remain in the untouched `edit-meal.tsx` and `templates.tsx`).
 - **Phase 1**: Diary grouped by meal type; item rows show food name, quantity, unit, calories; dedicated edit-meal screen with food picker, meal type, quantity, unit, notes; delete with immediate refetch.
 - **Phase 2**: Date-based diary — ‹ date label › navigation; Today/Tomorrow labels; "We can't see the future." guard; backend `GET /meal-logs?date=` and `GET /summary/daily?date=` added.
 - **Phase 3**: Profile screen added (Diary, Log Meal, Templates, Profile tabs); `GET /profile` and `PUT /profile` backend routes; Diary Nutrition section shows "eaten kcal / goal kcal" when goal is set, or "Set a daily calorie goal in Profile" hint when not set; Profile name change propagates to locally stored user so Diary greeting updates.
@@ -508,9 +550,19 @@ These cannot be verified by code review alone:
 
 ## Next Immediate Task
 
-**UI redesign pass** — all screens are functional but still placeholder. The next planned phase is a dedicated UI redesign: typography, colour system, spacing, card components. Do not make cosmetic changes before that pass.
+**UI theming is complete.** As of 3B4 every screen uses the dark slate-purple theme (`src/lib/theme.ts`) and `tsc --noEmit` is clean across the whole project. No remaining light screens, no known TS errors.
 
-**Limitation — tab bar on log-meal/templates**: When the user is on the Log Meal or Templates screen (accessed via the + action hub), the tab bar is still visible but no tab is highlighted as active (since those screens have `href: null`). This is acceptable for MVP. A future option is to set `tabBarStyle: { display: 'none' }` on those screens if a cleaner full-screen flow is preferred.
+Suggested next directions (not yet requested):
+- Delete the unused Expo starter files (`src/app/index.tsx`, `explore.tsx`, `components/app-tabs*.tsx`, `components/animated-icon*`) and the now-orphaned `(tabs)/add.tsx` (the + opens the popup, not a page).
+- Token-expiry handling (401 → redirect to login) — currently a generic error is shown.
+- A small shared UI kit could be extracted from the now-repeated themed styles (chips, food cards, buttons, inputs) to cut duplication across log-meal / edit-meal / templates.
+- Optional: add a real app icon / splash and a `git filter-branch` to purge the committed `backend/.env` before pushing (see Git Issue above).
+
+**Orphaned route — `(tabs)/add.tsx`**: the old full-page Add hub is no longer reachable (the + opens the `AddMenuSheet` popup instead). The file is left in place (harmless) and can be deleted in the 3B2 cleanup.
+
+**Limitation — tab bar on log-meal/templates**: When the user is on the Log Meal or Templates screen (reached via the + popup), the themed tab bar is still visible but no tab is highlighted as active (those screens have `href: null`). Acceptable for MVP. A future option is `tabBarStyle: { display: 'none' }` on those screens for a cleaner full-screen flow.
+
+**TypeScript**: `tsc --noEmit` is clean across the whole project as of 3B4. The previously-noted `edit-meal.tsx` (`itemPayload` → `PendingItem`) and `templates.tsx` (`FoodItem.serving_unit`) type errors are both fixed.
 
 **Known limitation — streak reversal on delete is approximate**: when a meal is deleted bringing today's calories below the goal, `goal_streak` is decremented by 1 and `last_goal_hit_date` is cleared to null. If the user had a multi-day streak, the streak count is correct but we lose the previous `last_goal_hit_date`, so the streak chain is broken for tomorrow. Acceptable for MVP.
 

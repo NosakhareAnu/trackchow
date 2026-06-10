@@ -1,5 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 
+import { colors, radius, spacing } from '@/lib/theme';
+
 // Nutrition values from food_items.
 // Legacy fields (calories, carbs_g, etc.) are always present.
 // Per-100g fields are optional — present only for foods with updated data.
@@ -103,11 +105,13 @@ function MacroBox({
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: '#F0FDF4',
-    borderRadius: 10,
-    padding: 14,
-    gap: 10,
-    marginTop: 4,
+    backgroundColor: colors.elevated,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    gap: spacing.md,
+    marginTop: spacing.xs,
   },
   titleRow: {
     flexDirection: 'row',
@@ -115,13 +119,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   title: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
-    color: '#16a34a',
+    color: colors.textMuted,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
   },
   subtitle: {
     fontSize: 12,
-    color: '#555',
+    color: colors.textMuted,
   },
   row: {
     flexDirection: 'row',
@@ -135,19 +141,19 @@ const styles = StyleSheet.create({
   macroValue: {
     fontSize: 15,
     fontWeight: '700',
-    color: '#111',
+    color: colors.textPrimary,
   },
   accentValue: {
-    color: '#16a34a',
+    color: colors.accentSoft,
     fontSize: 16,
   },
   macroUnit: {
     fontSize: 10,
-    color: '#888',
+    color: colors.textMuted,
   },
   macroLabel: {
     fontSize: 10,
-    color: '#555',
+    color: colors.textMuted,
     textAlign: 'center',
   },
 });

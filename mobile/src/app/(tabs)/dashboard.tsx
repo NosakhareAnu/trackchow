@@ -1,26 +1,31 @@
 import { useFocusEffect, useRouter } from 'expo-router';
+import { setStatusBarStyle } from 'expo-status-bar';
+import { Activity, Flame, Gauge } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import api from '@/lib/api';
-import { clearAuth, getUser, StoredUser } from '@/lib/auth-storage';
+import { getUser, StoredUser } from '@/lib/auth-storage';
 import { consumeFlash, FlashType } from '@/lib/flash-message';
 import {
   deletePendingLog,
-  getPendingCount,
   getPendingLogs,
   PendingMealLog,
   removeSyncedLogs,
 } from '@/lib/offline-sync';
+import { colors, radius, spacing } from '@/lib/theme';
 
 // Shape of GET /summary/daily response data
 type DailySummary = {
@@ -239,6 +244,10 @@ export default function DashboardScreen() {
   // Also consumes any pending flash message from log-meal (one-shot, module-level store).
   useFocusEffect(
     useCallback(() => {
+      // Diary is dark-themed — use light status bar icons while it is focused,
+      // and restore dark icons on blur so the still-light Profile screen stays readable.
+      setStatusBarStyle('light');
+
       const flash = consumeFlash();
       const dateToShow = flash?.date ?? selectedDateRef.current;
 
@@ -261,6 +270,7 @@ export default function DashboardScreen() {
 
       return () => {
         if (timer) clearTimeout(timer);
+        setStatusBarStyle('dark');
       };
     }, [])
   );
@@ -330,6 +340,12 @@ export default function DashboardScreen() {
     }
     setFutureMsg('');
     setSelectedDate(prev => addDays(prev, 1));
+  }
+
+  // Subtle affordance: tapping the date label jumps back to Today.
+  function goToToday() {
+    setFutureMsg('');
+    setSelectedDate(todayStr());
   }
 
   // ── Edit / delete handlers ────────────────────────────────────────────────
@@ -486,11 +502,6 @@ export default function DashboardScreen() {
     }
   }
 
-  async function handleLogout() {
-    await clearAuth();
-    router.replace('/(auth)/login');
-  }
-
   // Format a date string like "2026-06-08" to a short label like "Jun 8"
   function formatDate(dateStr: string): string {
     const date = new Date(dateStr + 'T00:00:00');
@@ -500,18 +511,27 @@ export default function DashboardScreen() {
   if (loading) {
     return (
       <SafeAreaView style={styles.centered}>
-        <ActivityIndicator size="large" color="#2563EB" />
-        <Text style={styles.loadingText}>Loading dashboard...</Text>
+        <ActivityIndicator size="large" color={colors.accent} />
+        <Text style={styles.loadingText}>Loading diary...</Text>
       </SafeAreaView>
     );
   }
 
+  const isToday = selectedDate === todayStr();
+
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <ScrollView
         contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor={colors.accent}
+            colors={[colors.accent]}
+            progressBackgroundColor={colors.card}
+          />
         }>
 
         {/* Header */}
@@ -520,15 +540,32 @@ export default function DashboardScreen() {
 
         {/* Date navigation */}
         <View style={styles.dateNav}>
-          <Pressable onPress={goToPrevDay} style={styles.dateArrow}>
+          <Pressable onPress={goToPrevDay} style={({ pressed }) => [styles.dateArrow, pressed && styles.pressedDim]}>
             <Text style={styles.dateArrowText}>‹</Text>
           </Pressable>
-          <Text style={styles.dateLabel}>{formatDateLabel(selectedDate)}</Text>
-          <Pressable onPress={goToNextDay} style={styles.dateArrow}>
+          <Pressable onPress={goToToday} style={styles.dateLabelWrap} disabled={isToday}>
+            <Text style={styles.dateLabel}>{formatDateLabel(selectedDate)}</Text>
+            {!isToday && <Text style={styles.dateLabelHint}>Tap to return to today</Text>}
+          </Pressable>
+          <Pressable onPress={goToNextDay} style={({ pressed }) => [styles.dateArrow, pressed && styles.pressedDim]}>
             <Text style={styles.dateArrowText}>›</Text>
           </Pressable>
         </View>
         {futureMsg ? <Text style={styles.futureMsg}>{futureMsg}</Text> : null}
+
+        {/* Streak — compact, themed chips */}
+        <View style={styles.streakRow}>
+          <View style={styles.streakChip}>
+            <Flame color={colors.support} size={16} />
+            <Text style={styles.streakChipValue}>{trackingStreak ?? 0}</Text>
+            <Text style={styles.streakChipLabel}>Tracking streak</Text>
+          </View>
+          <View style={styles.streakChip}>
+            <Flame color={colors.support} size={16} />
+            <Text style={styles.streakChipValue}>{goalStreak ?? 0}</Text>
+            <Text style={styles.streakChipLabel}>Goal streak</Text>
+          </View>
+        </View>
 
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
@@ -541,40 +578,12 @@ export default function DashboardScreen() {
           </View>
         ) : null}
 
-        {/* Streak summary */}
-        <View style={styles.streakCard}>
-          <View style={styles.streakItem}>
-            <Text style={styles.streakValue}>{trackingStreak ?? 0}</Text>
-            <Text style={styles.streakLabel}>Tracking{'\n'}Streak</Text>
-          </View>
-          <View style={styles.streakCardDivider} />
-          <View style={styles.streakItem}>
-            <Text style={styles.streakValue}>{goalStreak ?? 0}</Text>
-            <Text style={styles.streakLabel}>Goal{'\n'}Streak</Text>
-          </View>
+        {/* Nutrition — swipeable summary panels */}
+        <View style={styles.summaryHeader}>
+          <Text style={styles.sectionTitle}>Nutrition</Text>
+          <Text style={styles.swipeHint}>swipe ›</Text>
         </View>
-
-        {/* Daily Summary */}
-        <Text style={styles.sectionTitle}>Nutrition</Text>
-        {daily ? (
-          <View style={styles.card}>
-            <View style={styles.macroRow}>
-              <MacroBox label="Calories" value={Math.round(daily.calories)} unit="kcal" />
-              <MacroBox label="Carbs" value={Math.round(daily.carbs_g)} unit="g" />
-              <MacroBox label="Protein" value={Math.round(daily.protein_g)} unit="g" />
-              <MacroBox label="Fat" value={Math.round(daily.fat_g)} unit="g" />
-            </View>
-            {calorieGoal != null ? (
-              <Text style={styles.goalText}>
-                {Math.round(daily.calories)} kcal / {calorieGoal} kcal
-              </Text>
-            ) : (
-              <Text style={styles.goalHint}>Set a daily calorie goal in Profile</Text>
-            )}
-          </View>
-        ) : (
-          <Text style={styles.emptyText}>No nutrition data for today.</Text>
-        )}
+        <NutritionSummary daily={daily} calorieGoal={calorieGoal} />
 
         {/* Nutrition Insight — rule-based, updates with the selected date's data */}
         <NutritionInsightCard
@@ -593,11 +602,11 @@ export default function DashboardScreen() {
               <Text style={styles.syncBannerSub}>Sync now to save them to your account.</Text>
             </View>
             <Pressable
-              style={({ pressed }) => [styles.syncBannerButton, pressed && { opacity: 0.7 }]}
+              style={({ pressed }) => [styles.syncBannerButton, pressed && styles.pressedDim]}
               onPress={handleSync}
               disabled={syncing}>
               {syncing
-                ? <ActivityIndicator size="small" color="#92400E" />
+                ? <ActivityIndicator size="small" color="#1A1300" />
                 : <Text style={styles.syncBannerButtonText}>Sync Now</Text>}
             </Pressable>
           </View>
@@ -610,14 +619,14 @@ export default function DashboardScreen() {
         <View style={styles.sectionRow}>
           <Text style={[styles.sectionTitle, styles.sectionTitleInRow]}>Meals</Text>
           <Pressable
-            style={({ pressed }) => [styles.logMealLink, pressed && { opacity: 0.7 }]}
+            style={({ pressed }) => [styles.logMealLink, pressed && styles.pressedDim]}
             onPress={() => router.push({ pathname: '/(tabs)/log-meal', params: { date: selectedDate } })}>
             <Text style={styles.logMealLinkText}>+ Log Meal</Text>
           </Pressable>
         </View>
         {actionError ? <Text style={styles.actionError}>{actionError}</Text> : null}
         {todayLogs.length === 0 ? (
-          <Text style={styles.emptyText}>No meals logged today.</Text>
+          <Text style={styles.emptyText}>No meals logged for this day.</Text>
         ) : (
           groupLogsByMealType(todayLogs).map(({ mealType, logs: group }) => (
             <View key={mealType}>
@@ -642,16 +651,16 @@ export default function DashboardScreen() {
                   {log.notes ? <Text style={styles.notes}>{log.notes}</Text> : null}
                   <View style={styles.cardActions}>
                     <Pressable
-                      style={({ pressed }) => [styles.editButton, pressed && { opacity: 0.7 }]}
+                      style={({ pressed }) => [styles.editButton, pressed && styles.pressedDim]}
                       onPress={() => handleEditOnlineLog(log)}>
                       <Text style={styles.editButtonText}>Edit</Text>
                     </Pressable>
                     <Pressable
-                      style={({ pressed }) => [styles.deleteButton, pressed && { opacity: 0.7 }]}
+                      style={({ pressed }) => [styles.deleteButton, pressed && styles.pressedDim]}
                       onPress={() => handleDeleteOnlineLog(log.id)}
                       disabled={deletingId === log.id}>
                       {deletingId === log.id
-                        ? <ActivityIndicator size="small" color="#c0392b" />
+                        ? <ActivityIndicator size="small" color={colors.danger} />
                         : <Text style={styles.deleteButtonText}>Delete</Text>}
                     </Pressable>
                   </View>
@@ -667,8 +676,8 @@ export default function DashboardScreen() {
           <Text style={styles.emptyText}>No weekly data available.</Text>
         ) : (
           <View style={styles.card}>
-            {weekly.map((day) => (
-              <View key={day.date} style={styles.weekRow}>
+            {weekly.map((day, i) => (
+              <View key={day.date} style={[styles.weekRow, i === weekly.length - 1 && styles.weekRowLast]}>
                 <Text style={styles.weekDate}>{formatDate(day.date)}</Text>
                 <Text style={styles.weekCalories}>{Math.round(day.calories)} kcal</Text>
                 <Text style={styles.weekMacros}>
@@ -714,16 +723,16 @@ export default function DashboardScreen() {
             {log.notes ? <Text style={styles.notes}>{log.notes}</Text> : null}
             <View style={styles.cardActions}>
               <Pressable
-                style={({ pressed }) => [styles.editButton, pressed && { opacity: 0.7 }]}
+                style={({ pressed }) => [styles.editButton, pressed && styles.pressedDim]}
                 onPress={() => handleEditOfflineLog(log)}>
                 <Text style={styles.editButtonText}>Edit</Text>
               </Pressable>
               <Pressable
-                style={({ pressed }) => [styles.deleteButton, pressed && { opacity: 0.7 }]}
+                style={({ pressed }) => [styles.deleteButton, pressed && styles.pressedDim]}
                 onPress={() => handleDeleteOfflineLog(log.client_temp_id)}
                 disabled={deletingTempId === log.client_temp_id}>
                 {deletingTempId === log.client_temp_id
-                  ? <ActivityIndicator size="small" color="#c0392b" />
+                  ? <ActivityIndicator size="small" color={colors.danger} />
                   : <Text style={styles.deleteButtonText}>Delete</Text>}
               </Pressable>
             </View>
@@ -732,7 +741,7 @@ export default function DashboardScreen() {
 
         {pendingCount > 0 && (
           <Pressable
-            style={({ pressed }) => [styles.syncButton, pressed && styles.buttonPressed]}
+            style={({ pressed }) => [styles.syncButton, pressed && styles.pressedDim]}
             onPress={handleSync}
             disabled={syncing}>
             {syncing ? (
@@ -743,25 +752,127 @@ export default function DashboardScreen() {
           </Pressable>
         )}
 
-        {/* Logout */}
-        <Pressable
-          style={({ pressed }) => [styles.logoutButton, pressed && styles.buttonPressed]}
-          onPress={handleLogout}>
-          <Text style={styles.logoutText}>Log Out</Text>
-        </Pressable>
-
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-// Small reusable macro display box
-function MacroBox({ label, value, unit }: { label: string; value: number; unit: string }) {
+// ── Nutrition summary (swipeable panels) ────────────────────────────────────────
+
+// Horizontal, paged summary — TWO panels.
+//   Panel 1 (Calories): eaten / goal / progress / remaining-or-over.
+//   Panel 2 (Macros):   protein / carbs / fat — grams EATEN only. The app stores
+//                       no macro goals, so these must never show "/ goal".
+function NutritionSummary({
+  daily,
+  calorieGoal,
+}: {
+  daily: DailySummary | null;
+  calorieGoal: number | null;
+}) {
+  const { width } = useWindowDimensions();
+  const pageWidth = width; // full-bleed paging within the padded scroll view
+  const [index, setIndex] = useState(0);
+
+  const cals = Math.round(daily?.calories ?? 0);
+  const protein = Math.round(daily?.protein_g ?? 0);
+  const carbs = Math.round(daily?.carbs_g ?? 0);
+  const fat = Math.round(daily?.fat_g ?? 0);
+
+  const hasGoal = calorieGoal != null && calorieGoal > 0;
+  const remaining = hasGoal ? calorieGoal! - cals : 0;
+  const over = remaining < 0;
+  const pct = hasGoal ? Math.max(0, Math.min(1, cals / calorieGoal!)) : 0;
+
+  function onMomentumEnd(e: NativeSyntheticEvent<NativeScrollEvent>) {
+    const i = Math.round(e.nativeEvent.contentOffset.x / pageWidth);
+    if (i !== index) setIndex(i);
+  }
+
+  const PANELS = 2;
+
   return (
-    <View style={styles.macroBox}>
-      <Text style={styles.macroValue}>{value}</Text>
-      <Text style={styles.macroUnit}>{unit}</Text>
-      <Text style={styles.macroLabel}>{label}</Text>
+    <View>
+      <ScrollView
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        onMomentumScrollEnd={onMomentumEnd}
+        style={styles.pager}>
+        {/* Panel 1 — Calories */}
+        <View style={[styles.panel, { width: pageWidth }]}>
+          <View style={styles.panelCard}>
+            <View style={styles.panelLabelRow}>
+              <Gauge color={colors.textMuted} size={14} />
+              <Text style={styles.panelLabel}>CALORIES</Text>
+            </View>
+            <View style={styles.panelAccentLine} />
+            <View style={styles.bigRow}>
+              <Text style={styles.bigNumber}>{cals}</Text>
+              <Text style={styles.bigUnit}>kcal</Text>
+            </View>
+            {hasGoal ? (
+              <>
+                <View style={styles.track}>
+                  <View
+                    style={[
+                      styles.trackFill,
+                      { width: `${pct * 100}%` },
+                      over && styles.trackFillOver,
+                    ]}
+                  />
+                </View>
+                <View style={styles.metaRow}>
+                  <Text style={styles.metaMuted}>{cals} of {calorieGoal} kcal</Text>
+                  <Text style={over ? styles.metaOver : styles.metaMuted}>
+                    {over ? `${Math.abs(remaining)} over` : `${remaining} left`}
+                  </Text>
+                </View>
+              </>
+            ) : (
+              <Text style={styles.panelHint}>Set a daily calorie goal in Profile</Text>
+            )}
+          </View>
+        </View>
+
+        {/* Panel 2 — Macros (eaten only) */}
+        <View style={[styles.panel, { width: pageWidth }]}>
+          <View style={styles.panelCard}>
+            <View style={styles.panelLabelRow}>
+              <Activity color={colors.textMuted} size={14} />
+              <Text style={styles.panelLabel}>MACROS</Text>
+            </View>
+            <View style={styles.panelAccentLine} />
+            <View style={styles.macroTriple}>
+              <MacroColumn label="Protein" value={protein} />
+              <View style={styles.macroColDivider} />
+              <MacroColumn label="Carbs" value={carbs} />
+              <View style={styles.macroColDivider} />
+              <MacroColumn label="Fat" value={fat} />
+            </View>
+            <Text style={styles.panelHint}>grams eaten today</Text>
+          </View>
+        </View>
+      </ScrollView>
+
+      {/* Page dots */}
+      <View style={styles.dotsRow}>
+        {Array.from({ length: PANELS }).map((_, i) => (
+          <View key={i} style={[styles.dot, i === index && styles.dotActive]} />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+// One macro column inside the combined Macros panel — grams eaten only.
+function MacroColumn({ label, value }: { label: string; value: number }) {
+  return (
+    <View style={styles.macroCol}>
+      <Text style={styles.macroColValue}>
+        {value}<Text style={styles.macroColUnit}>g</Text>
+      </Text>
+      <Text style={styles.macroColLabel}>{label}</Text>
     </View>
   );
 }
@@ -776,13 +887,13 @@ function insightTextStyle(level: InsightLevel) {
   }
 }
 
-// Returns a prefix character for each insight level.
-function insightPrefix(level: InsightLevel): string {
+// Returns a coloured dot prefix for each insight level (mature, non-playful).
+function insightDotStyle(level: InsightLevel) {
   switch (level) {
-    case 'warning': return '⚠ ';
-    case 'info':    return '💡 ';
-    case 'success': return '✓ ';
-    default:        return '';
+    case 'warning': return styles.dotWarning;
+    case 'info':    return styles.dotInfo;
+    case 'success': return styles.dotSuccess;
+    default:        return styles.dotEmpty;
   }
 }
 
@@ -802,9 +913,12 @@ function NutritionInsightCard({
     <View style={styles.insightCard}>
       <Text style={styles.insightTitle}>Nutrition Insight</Text>
       {insights.map((insight, i) => (
-        <Text key={i} style={[styles.insightText, insightTextStyle(insight.level)]}>
-          {insightPrefix(insight.level)}{insight.text}
-        </Text>
+        <View key={i} style={styles.insightRow}>
+          <View style={[styles.insightDot, insightDotStyle(insight.level)]} />
+          <Text style={[styles.insightText, insightTextStyle(insight.level)]}>
+            {insight.text}
+          </Text>
+        </View>
       ))}
     </View>
   );
@@ -813,140 +927,319 @@ function NutritionInsightCard({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: colors.bg,
   },
   centered: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     gap: 12,
-    backgroundColor: '#fff',
+    backgroundColor: colors.bg,
   },
   loadingText: {
-    color: '#555',
+    color: colors.textMuted,
     fontSize: 14,
   },
   scroll: {
-    paddingHorizontal: 20,
-    paddingTop: 24,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
     paddingBottom: 40,
-    gap: 8,
+    gap: spacing.sm,
   },
   title: {
-    fontSize: 26,
-    fontWeight: 'bold',
-    marginBottom: 2,
+    fontSize: 28,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    letterSpacing: 0.2,
   },
   welcome: {
-    fontSize: 15,
-    color: '#555',
-    marginBottom: 8,
+    fontSize: 14,
+    color: colors.textMuted,
+    marginBottom: spacing.sm,
   },
   error: {
-    color: '#c0392b',
+    color: colors.danger,
     fontSize: 14,
-    marginBottom: 8,
+    marginBottom: spacing.sm,
   },
+  pressedDim: {
+    opacity: 0.6,
+  },
+
+  // Section titles
   sectionTitle: {
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '600',
-    marginTop: 16,
-    marginBottom: 6,
+    color: colors.textPrimary,
+    letterSpacing: 0.2,
+    marginTop: spacing.lg,
+    marginBottom: spacing.xs,
   },
-  card: {
-    backgroundColor: '#F5F5F7',
-    borderRadius: 10,
-    padding: 14,
-    gap: 6,
-  },
-  macroRow: {
+  summaryHeader: {
     flexDirection: 'row',
+    alignItems: 'flex-end',
     justifyContent: 'space-between',
   },
-  macroBox: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  macroValue: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#2563EB',
-  },
-  macroUnit: {
-    fontSize: 11,
-    color: '#888',
-  },
-  macroLabel: {
+  swipeHint: {
+    color: colors.textMuted,
     fontSize: 12,
-    color: '#555',
-    marginTop: 2,
+    marginBottom: spacing.xs,
   },
+
+  // Generic card
+  card: {
+    backgroundColor: colors.card,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.lg,
+    gap: spacing.xs,
+  },
+
+  // ── Date navigation ──
+  dateNav: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  dateArrow: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.pill,
+    backgroundColor: colors.elevated,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  dateArrowText: {
+    fontSize: 22,
+    color: colors.accentSoft,
+    fontWeight: '600',
+    lineHeight: 26,
+  },
+  dateLabelWrap: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  dateLabel: {
+    textAlign: 'center',
+    fontSize: 17,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  dateLabelHint: {
+    fontSize: 11,
+    color: colors.textMuted,
+    marginTop: 1,
+  },
+  futureMsg: {
+    fontSize: 12,
+    color: colors.warning,
+    textAlign: 'center',
+    marginBottom: spacing.xs,
+  },
+
+  // ── Streak chips ──
+  streakRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  streakChip: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.elevated,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
+  streakChipValue: {
+    color: colors.support,
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  streakChipLabel: {
+    color: colors.textMuted,
+    fontSize: 12,
+    flexShrink: 1,
+  },
+
+  // ── Nutrition summary panels ──
+  pager: {
+    marginHorizontal: -spacing.lg, // full-bleed inside the padded scroll view
+    marginTop: spacing.xs,
+  },
+  panel: {
+    paddingHorizontal: spacing.lg, // re-inset the card to line up with other content
+  },
+  panelCard: {
+    backgroundColor: colors.card,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.lg,
+    minHeight: 148,
+    justifyContent: 'flex-start',
+  },
+  panelLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  panelLabel: {
+    color: colors.textMuted,
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 1.2,
+  },
+  panelAccentLine: {
+    width: 22,
+    height: 3,
+    borderRadius: radius.pill,
+    backgroundColor: colors.accent,
+    marginTop: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  bigRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: spacing.sm,
+  },
+  bigNumber: {
+    color: colors.textPrimary,
+    fontSize: 42,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  bigUnit: {
+    color: colors.textMuted,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  panelHint: {
+    color: colors.textMuted,
+    fontSize: 13,
+    marginTop: spacing.md,
+  },
+  // Combined macros panel — three columns
+  macroTriple: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: spacing.xs,
+  },
+  macroCol: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 3,
+  },
+  macroColDivider: {
+    width: 1,
+    height: 34,
+    backgroundColor: colors.border,
+  },
+  macroColValue: {
+    color: colors.accentSoft,
+    fontSize: 26,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  macroColUnit: {
+    color: colors.textMuted,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  macroColLabel: {
+    color: colors.textMuted,
+    fontSize: 12,
+  },
+  track: {
+    height: 6,
+    borderRadius: radius.pill,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    marginTop: spacing.md,
+    overflow: 'hidden',
+  },
+  trackFill: {
+    height: 6,
+    borderRadius: radius.pill,
+    backgroundColor: colors.accent,
+  },
+  trackFillOver: {
+    backgroundColor: colors.warning,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: spacing.sm,
+  },
+  metaMuted: {
+    color: colors.textMuted,
+    fontSize: 12,
+  },
+  metaOver: {
+    color: colors.warning,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  dotsRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: spacing.md,
+  },
+  dot: {
+    width: 6,
+    height: 6,
+    borderRadius: radius.pill,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+  },
+  dotActive: {
+    width: 18,
+    backgroundColor: colors.accent,
+  },
+
+  // ── Meals section ──
   sectionRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 16,
-    marginBottom: 6,
+    marginTop: spacing.lg,
+    marginBottom: spacing.xs,
   },
   sectionTitleInRow: {
     marginTop: 0,
     marginBottom: 0,
   },
   logMealLink: {
-    paddingHorizontal: 4,
+    paddingHorizontal: spacing.xs,
     paddingVertical: 2,
   },
   logMealLinkText: {
-    color: '#2563EB',
+    color: colors.accent,
     fontSize: 14,
     fontWeight: '600',
   },
-  dateNav: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginVertical: 6,
-  },
-  dateArrow: {
-    width: 36,
-    height: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 18,
-    backgroundColor: '#F5F5F7',
-  },
-  dateArrowText: {
-    fontSize: 22,
-    color: '#2563EB',
-    fontWeight: '600',
-    lineHeight: 28,
-  },
-  dateLabel: {
-    flex: 1,
-    textAlign: 'center',
-    fontSize: 17,
-    fontWeight: '600',
-    color: '#111',
-  },
-  futureMsg: {
-    fontSize: 12,
-    color: '#d97706',
-    textAlign: 'center',
-    marginBottom: 2,
-  },
   mealGroupHeader: {
-    fontSize: 15,
+    fontSize: 12,
     fontWeight: '700',
-    color: '#111',
-    marginTop: 10,
-    marginBottom: 4,
-    textTransform: 'capitalize',
+    color: colors.textMuted,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginTop: spacing.md,
+    marginBottom: spacing.xs,
   },
   itemRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    gap: 8,
+    gap: spacing.sm,
   },
   itemRowLeft: {
     flex: 1,
@@ -954,71 +1247,130 @@ const styles = StyleSheet.create({
   },
   itemName: {
     fontSize: 14,
-    color: '#111',
+    color: colors.textPrimary,
   },
   itemDetail: {
     fontSize: 12,
-    color: '#888',
+    color: colors.textMuted,
   },
   itemCalories: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#2563EB',
+    color: colors.accentSoft,
     flexShrink: 0,
   },
   mealType: {
     fontSize: 14,
     fontWeight: '600',
+    color: colors.textPrimary,
     textTransform: 'capitalize',
     marginBottom: 2,
   },
   mealItem: {
     fontSize: 13,
-    color: '#333',
+    color: colors.textPrimary,
   },
   notes: {
     fontSize: 12,
-    color: '#888',
+    color: colors.textMuted,
     fontStyle: 'italic',
-    marginTop: 4,
+    marginTop: spacing.xs,
   },
   emptyText: {
     fontSize: 13,
-    color: '#aaa',
-    marginBottom: 4,
+    color: colors.textMuted,
+    marginBottom: spacing.xs,
   },
+
+  // ── Weekly ──
   weekRow: {
-    paddingVertical: 6,
+    paddingVertical: spacing.sm,
     borderBottomWidth: 1,
-    borderBottomColor: '#E5E5EA',
+    borderBottomColor: colors.border,
     gap: 2,
+  },
+  weekRowLast: {
+    borderBottomWidth: 0,
   },
   weekDate: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#333',
+    color: colors.textPrimary,
   },
   weekCalories: {
     fontSize: 13,
-    color: '#2563EB',
+    color: colors.accentSoft,
   },
   weekMacros: {
     fontSize: 12,
-    color: '#888',
+    color: colors.textMuted,
   },
+
+  // ── Offline / pending ──
   pendingBadge: {
-    color: '#d97706',
+    color: colors.warning,
     fontWeight: '600',
   },
   pendingBadgeZero: {
-    color: '#aaa',
+    color: colors.textMuted,
     fontWeight: 'normal',
   },
+  pendingCard: {
+    borderLeftWidth: 3,
+    borderLeftColor: colors.warning,
+  },
+  offlineBadge: {
+    color: colors.warning,
+    fontWeight: 'normal',
+    fontSize: 11,
+  },
+
+  // ── Card actions ──
+  cardActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  editButton: {
+    borderWidth: 1,
+    borderColor: colors.accent,
+    borderRadius: radius.sm,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+  },
+  editButtonText: {
+    color: colors.accentSoft,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  deleteButton: {
+    borderWidth: 1,
+    borderColor: colors.danger,
+    borderRadius: radius.sm,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    minWidth: 64,
+    alignItems: 'center',
+  },
+  deleteButtonText: {
+    color: colors.danger,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  actionError: {
+    color: colors.danger,
+    fontSize: 13,
+    textAlign: 'center',
+    marginBottom: spacing.xs,
+  },
+
+  // ── Sync ──
   syncButton: {
-    backgroundColor: '#16a34a',
-    borderRadius: 8,
+    backgroundColor: colors.accent,
+    borderRadius: radius.md,
     padding: 14,
     alignItems: 'center',
+    marginTop: spacing.sm,
   },
   syncButtonText: {
     color: '#fff',
@@ -1027,176 +1379,20 @@ const styles = StyleSheet.create({
   },
   syncMessage: {
     fontSize: 13,
-    color: '#555',
+    color: colors.textMuted,
     textAlign: 'center',
-  },
-  logoutButton: {
-    marginTop: 24,
-    borderWidth: 1,
-    borderColor: '#c0392b',
-    borderRadius: 8,
-    padding: 14,
-    alignItems: 'center',
-  },
-  buttonPressed: {
-    opacity: 0.7,
-  },
-  logoutText: {
-    color: '#c0392b',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  pendingCard: {
-    borderLeftWidth: 3,
-    borderLeftColor: '#d97706',
-  },
-  offlineBadge: {
-    color: '#d97706',
-    fontWeight: 'normal',
-    fontSize: 11,
-  },
-  cardActions: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 6,
-  },
-  editButton: {
-    borderWidth: 1,
-    borderColor: '#2563EB',
-    borderRadius: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-  },
-  editButtonText: {
-    color: '#2563EB',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  deleteButton: {
-    borderWidth: 1,
-    borderColor: '#c0392b',
-    borderRadius: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    minWidth: 60,
-    alignItems: 'center',
-  },
-  deleteButtonText: {
-    color: '#c0392b',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  actionError: {
-    color: '#c0392b',
-    fontSize: 13,
-    textAlign: 'center',
-    marginBottom: 4,
-  },
-  goalText: {
-    fontSize: 13,
-    color: '#555',
-    textAlign: 'center',
-    marginTop: 6,
-  },
-  goalHint: {
-    fontSize: 12,
-    color: '#aaa',
-    textAlign: 'center',
-    marginTop: 6,
-    fontStyle: 'italic',
-  },
-  insightCard: {
-    backgroundColor: '#FAFAFA',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#E5E5EA',
-    padding: 14,
-    gap: 6,
-    marginTop: 4,
-  },
-  insightTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#333',
-    marginBottom: 2,
-  },
-  insightText: {
-    fontSize: 13,
-    lineHeight: 20,
-  },
-  insightWarning: {
-    color: '#92400E',
-  },
-  insightInfo: {
-    color: '#1e40af',
-  },
-  insightSuccess: {
-    color: '#166534',
-  },
-  insightEmpty: {
-    color: '#888',
-  },
-  streakCard: {
-    flexDirection: 'row',
-    backgroundColor: '#F5F5F7',
-    borderRadius: 10,
-    marginTop: 4,
-    overflow: 'hidden',
-  },
-  streakItem: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 12,
-    gap: 2,
-  },
-  streakCardDivider: {
-    width: 1,
-    backgroundColor: '#E0E0E0',
-    marginVertical: 8,
-  },
-  streakValue: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#2563EB',
-  },
-  streakLabel: {
-    fontSize: 11,
-    color: '#555',
-    textAlign: 'center',
-    lineHeight: 15,
-  },
-  flashBanner: {
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 4,
-  },
-  flashBannerOnline: {
-    backgroundColor: '#DCFCE7',
-  },
-  flashBannerOffline: {
-    backgroundColor: '#FEF3C7',
-  },
-  flashText: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  flashTextOnline: {
-    color: '#166534',
-  },
-  flashTextOffline: {
-    color: '#92400E',
   },
   syncBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#FEF3C7',
+    backgroundColor: colors.warningFill,
     borderLeftWidth: 3,
-    borderLeftColor: '#d97706',
-    borderRadius: 8,
-    padding: 12,
-    gap: 10,
-    marginTop: 8,
+    borderLeftColor: colors.warning,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    gap: spacing.md,
+    marginTop: spacing.sm,
   },
   syncBannerLeft: {
     flex: 1,
@@ -1205,23 +1401,92 @@ const styles = StyleSheet.create({
   syncBannerTitle: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#92400E',
+    color: colors.warning,
   },
   syncBannerSub: {
     fontSize: 12,
-    color: '#78350F',
+    color: colors.textMuted,
   },
   syncBannerButton: {
-    backgroundColor: '#d97706',
-    borderRadius: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
+    backgroundColor: colors.warning,
+    borderRadius: radius.sm,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     minWidth: 76,
     alignItems: 'center',
   },
   syncBannerButtonText: {
-    color: '#fff',
+    color: '#1A1300',
     fontSize: 12,
     fontWeight: '700',
   },
+
+  // ── Flash banner ──
+  flashBanner: {
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginTop: spacing.xs,
+    borderWidth: 1,
+  },
+  flashBannerOnline: {
+    backgroundColor: colors.successFill,
+    borderColor: 'rgba(88,194,125,0.4)',
+  },
+  flashBannerOffline: {
+    backgroundColor: colors.warningFill,
+    borderColor: 'rgba(244,184,96,0.4)',
+  },
+  flashText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  flashTextOnline: {
+    color: colors.success,
+  },
+  flashTextOffline: {
+    color: colors.warning,
+  },
+
+  // ── Insight card ──
+  insightCard: {
+    backgroundColor: colors.elevated,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.lg,
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  insightTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.textMuted,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  insightRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+  },
+  insightDot: {
+    width: 7,
+    height: 7,
+    borderRadius: radius.pill,
+    marginTop: 6,
+  },
+  insightText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 20,
+  },
+  insightWarning: { color: colors.warning },
+  insightInfo: { color: colors.accentSoft },
+  insightSuccess: { color: colors.success },
+  insightEmpty: { color: colors.textMuted },
+  dotWarning: { backgroundColor: colors.warning },
+  dotInfo: { backgroundColor: colors.accentSoft },
+  dotSuccess: { backgroundColor: colors.success },
+  dotEmpty: { backgroundColor: colors.textMuted },
 });

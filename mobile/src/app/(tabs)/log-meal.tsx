@@ -1,4 +1,6 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { setStatusBarStyle } from 'expo-status-bar';
+import { Search } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -13,6 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import api from '@/lib/api';
+import { colors, radius, spacing } from '@/lib/theme';
 import { setFlash } from '@/lib/flash-message';
 import {
   getCachedServingUnits,
@@ -165,6 +168,8 @@ export default function LogMealScreen() {
   // Also resets the form when returning after a successful log (justLoggedRef).
   useFocusEffect(
     useCallback(() => {
+      // Dark-themed screen — light status-bar icons while focused; restore on blur.
+      setStatusBarStyle('light');
       setLogDate(params.date || todayStr());
       getRecentFoods().then(setRecentFoods);
       if (justLoggedRef.current) {
@@ -183,6 +188,7 @@ export default function LogMealScreen() {
         setAiStep('none');
         setAiError('');
       }
+      return () => setStatusBarStyle('dark');
     }, [params.date])
   );
 
@@ -414,13 +420,13 @@ export default function LogMealScreen() {
             value={quantity}
             onChangeText={setQuantity}
             placeholder="e.g. 2"
-            placeholderTextColor="#999"
+            placeholderTextColor={colors.placeholder}
           />
 
           {/* Serving unit picker — dynamic from API, grouped by type */}
           <Text style={styles.label}>Unit</Text>
           {servingUnitsLoading ? (
-            <ActivityIndicator color="#2563EB" size="small" style={{ alignSelf: 'flex-start' }} />
+            <ActivityIndicator color={colors.accent} size="small" style={{ alignSelf: 'flex-start' }} />
           ) : servingUnits.length > 0 ? (
             <>
               {conventionalUnits.length > 0 && (
@@ -525,15 +531,18 @@ export default function LogMealScreen() {
       <View style={styles.searchHeader}>
         <Text style={styles.heading}>Log Meal</Text>
         <Text style={styles.dateBadge}>Logging for: {formatLogDateLabel(logDate)}</Text>
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search food (e.g. jollof rice)"
-          placeholderTextColor="#999"
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          autoCapitalize="none"
-          clearButtonMode="while-editing"
-        />
+        <View style={styles.searchBox}>
+          <Search color={colors.textMuted} size={18} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search food (e.g. jollof rice)"
+            placeholderTextColor={colors.placeholder}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoCapitalize="none"
+            clearButtonMode="while-editing"
+          />
+        </View>
         {isShortQuery && searchQuery.length === 0
           ? null
           : isShortQuery
@@ -549,21 +558,19 @@ export default function LogMealScreen() {
           {recentFoods.length > 0 ? (
             <>
               <Text style={styles.sectionLabel}>Recent</Text>
-              {recentFoods.map((food, i) => (
-                <View key={food.id}>
-                  <Pressable
-                    style={({ pressed }) => [styles.foodCard, pressed && styles.pressed]}
-                    onPress={() => handleSelectFood(food)}>
-                    <View style={styles.foodCardLeft}>
-                      <Text style={styles.foodName}>{food.name}</Text>
-                      {food.serving_unit ? (
-                        <Text style={styles.foodUnit}>per {food.serving_unit}</Text>
-                      ) : null}
-                    </View>
-                    <Text style={styles.foodCalories}>{food.calories} kcal</Text>
-                  </Pressable>
-                  {i < recentFoods.length - 1 && <View style={styles.separator} />}
-                </View>
+              {recentFoods.map((food) => (
+                <Pressable
+                  key={food.id}
+                  style={({ pressed }) => [styles.foodCard, pressed && styles.pressed]}
+                  onPress={() => handleSelectFood(food)}>
+                  <View style={styles.foodCardLeft}>
+                    <Text style={styles.foodName}>{food.name}</Text>
+                    {food.serving_unit ? (
+                      <Text style={styles.foodUnit}>per {food.serving_unit}</Text>
+                    ) : null}
+                  </View>
+                  <Text style={styles.foodCalories}>{food.calories} kcal</Text>
+                </Pressable>
               ))}
             </>
           ) : (
@@ -571,7 +578,7 @@ export default function LogMealScreen() {
           )}
         </ScrollView>
       ) : searchLoading ? (
-        <ActivityIndicator style={{ marginTop: 24 }} color="#2563EB" />
+        <ActivityIndicator style={{ marginTop: 24 }} color={colors.accent} />
       ) : searchError ? (
         <Text style={[styles.error, { margin: 20 }]}>{searchError}</Text>
       ) : foods.length > 0 ? (
@@ -598,7 +605,6 @@ export default function LogMealScreen() {
               <Text style={styles.foodCalories}>{item.calories} kcal</Text>
             </Pressable>
           )}
-          ItemSeparatorComponent={() => <View style={styles.separator} />}
         />
       ) : aiStep === 'confirm' ? (
         // Confirmation card — shown before making the AI call
@@ -626,7 +632,7 @@ export default function LogMealScreen() {
         // Loading state while AI estimates nutrition
         <ScrollView contentContainerStyle={[styles.list, { paddingTop: 16 }]}>
           <View style={styles.aiCard}>
-            <ActivityIndicator color="#7C3AED" style={{ marginBottom: 8 }} />
+            <ActivityIndicator color={colors.accent} style={{ marginBottom: 8 }} />
             <Text style={[styles.aiCardBody, { textAlign: 'center' }]}>
               Estimating nutrition...
             </Text>
@@ -673,60 +679,76 @@ export default function LogMealScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: colors.bg,
   },
   scroll: {
-    paddingHorizontal: 20,
-    paddingTop: 24,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
     paddingBottom: 40,
-    gap: 10,
+    gap: spacing.md,
   },
   searchHeader: {
-    paddingHorizontal: 20,
-    paddingTop: 24,
-    gap: 10,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+    gap: spacing.md,
   },
   heading: {
-    fontSize: 22,
-    fontWeight: 'bold',
+    fontSize: 24,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    letterSpacing: 0.2,
   },
   dateBadge: {
     fontSize: 13,
-    color: '#555',
+    color: colors.textMuted,
     marginBottom: 2,
   },
-  searchInput: {
+  searchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.inputBg,
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 8,
-    padding: 10,
+    borderColor: colors.inputBorder,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+  },
+  searchInput: {
+    flex: 1,
+    paddingVertical: 11,
     fontSize: 15,
-    color: '#000',
+    color: colors.textPrimary,
   },
   searchHint: {
     fontSize: 12,
-    color: '#aaa',
+    color: colors.textMuted,
     marginTop: -4,
   },
   list: {
-    paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
     paddingBottom: 40,
   },
   sectionLabel: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#aaa',
+    color: colors.textMuted,
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 6,
-    marginTop: 4,
+    letterSpacing: 0.8,
+    marginBottom: spacing.sm,
+    marginTop: spacing.xs,
   },
   foodCard: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 12,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingVertical: 14,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.sm,
   },
   foodCardLeft: {
     flex: 1,
@@ -734,48 +756,44 @@ const styles = StyleSheet.create({
   },
   foodName: {
     fontSize: 15,
-    color: '#111',
+    color: colors.textPrimary,
   },
   foodUnit: {
     fontSize: 12,
-    color: '#888',
+    color: colors.textMuted,
   },
   foodCalories: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#2563EB',
-    marginLeft: 8,
-  },
-  separator: {
-    height: 1,
-    backgroundColor: '#F0F0F0',
+    color: colors.accentSoft,
+    marginLeft: spacing.sm,
   },
   emptyText: {
     textAlign: 'center',
-    color: '#aaa',
+    color: colors.textMuted,
     marginTop: 40,
     fontSize: 14,
   },
   noResultsText: {
     textAlign: 'center',
-    color: '#555',
+    color: colors.textMuted,
     fontSize: 14,
-    marginBottom: 16,
+    marginBottom: spacing.lg,
   },
   offlineBanner: {
     fontSize: 12,
-    color: '#92400E',
-    backgroundColor: '#FEF3C7',
+    color: colors.warning,
+    backgroundColor: colors.warningFill,
     paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 6,
-    marginBottom: 10,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.sm,
+    marginBottom: spacing.md,
     textAlign: 'center',
   },
   aiButton: {
-    backgroundColor: '#7C3AED',
-    borderRadius: 8,
-    padding: 12,
+    backgroundColor: colors.accent,
+    borderRadius: radius.md,
+    padding: spacing.md,
     alignItems: 'center',
     marginHorizontal: 40,
   },
@@ -785,44 +803,46 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   aiCard: {
-    backgroundColor: '#F5F3FF',
-    borderRadius: 10,
-    padding: 16,
-    gap: 12,
+    backgroundColor: colors.accentFill,
+    borderWidth: 1,
+    borderColor: 'rgba(139,128,249,0.4)',
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    gap: spacing.md,
   },
   aiCardTitle: {
     fontSize: 15,
     fontWeight: '700',
-    color: '#5B21B6',
+    color: colors.accentSoft,
   },
   aiCardBody: {
     fontSize: 14,
-    color: '#4C1D95',
+    color: colors.textPrimary,
     lineHeight: 20,
   },
   aiCardRow: {
     flexDirection: 'row',
-    gap: 10,
+    gap: spacing.md,
   },
   aiCancelButton: {
     flex: 1,
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 8,
-    paddingVertical: 10,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    paddingVertical: spacing.md,
     alignItems: 'center',
-    backgroundColor: '#fff',
+    backgroundColor: colors.elevated,
   },
   aiCancelText: {
-    color: '#333',
+    color: colors.textPrimary,
     fontWeight: '600',
     fontSize: 14,
   },
   aiConfirmButton: {
     flex: 1,
-    backgroundColor: '#7C3AED',
-    borderRadius: 8,
-    paddingVertical: 10,
+    backgroundColor: colors.accent,
+    borderRadius: radius.sm,
+    paddingVertical: spacing.md,
     alignItems: 'center',
   },
   aiConfirmText: {
@@ -831,71 +851,78 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   selectedCard: {
-    backgroundColor: '#EFF6FF',
-    borderRadius: 10,
-    padding: 14,
-    gap: 4,
+    backgroundColor: colors.accentFill,
+    borderWidth: 1,
+    borderColor: 'rgba(139,128,249,0.35)',
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    gap: spacing.xs,
   },
   selectedName: {
     fontSize: 17,
     fontWeight: '600',
+    color: colors.textPrimary,
   },
   selectedMacros: {
     fontSize: 12,
-    color: '#555',
+    color: colors.textMuted,
+    lineHeight: 18,
   },
   label: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#333',
-    marginTop: 4,
+    color: colors.textMuted,
+    marginTop: spacing.xs,
   },
   unitGroupLabel: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#aaa',
+    color: colors.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 0.4,
-    marginTop: 4,
+    marginTop: spacing.xs,
     marginBottom: 2,
   },
   chipRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: spacing.sm,
   },
   chip: {
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 20,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    borderColor: colors.inputBorder,
+    backgroundColor: colors.elevated,
+    borderRadius: radius.pill,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
   },
   chipSelected: {
-    backgroundColor: '#2563EB',
-    borderColor: '#2563EB',
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
   },
   chipText: {
     fontSize: 13,
-    color: '#333',
+    color: colors.textPrimary,
   },
   chipTextSelected: {
     color: '#fff',
+    fontWeight: '600',
   },
   input: {
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 8,
-    padding: 10,
+    borderColor: colors.inputBorder,
+    backgroundColor: colors.inputBg,
+    borderRadius: radius.sm,
+    padding: spacing.md,
     fontSize: 15,
-    color: '#000',
+    color: colors.textPrimary,
   },
   primaryButton: {
-    backgroundColor: '#2563EB',
-    borderRadius: 8,
+    backgroundColor: colors.accent,
+    borderRadius: radius.md,
     padding: 14,
     alignItems: 'center',
-    marginTop: 8,
+    marginTop: spacing.sm,
   },
   primaryButtonText: {
     color: '#fff',
@@ -904,21 +931,21 @@ const styles = StyleSheet.create({
   },
   ghostButton: {
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 8,
+    borderColor: colors.border,
+    borderRadius: radius.md,
     padding: 14,
     alignItems: 'center',
   },
   ghostButtonText: {
-    color: '#555',
+    color: colors.textMuted,
     fontSize: 15,
   },
   error: {
-    color: '#c0392b',
+    color: colors.danger,
     fontSize: 13,
     textAlign: 'center',
   },
   pressed: {
-    opacity: 0.7,
+    opacity: 0.6,
   },
 });

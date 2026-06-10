@@ -1,4 +1,6 @@
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { setStatusBarStyle } from 'expo-status-bar';
+import { Flame, LogOut } from 'lucide-react-native';
 import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
@@ -12,7 +14,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import api from '@/lib/api';
-import { getUser, saveUser } from '@/lib/auth-storage';
+import { clearAuth, getUser, saveUser } from '@/lib/auth-storage';
+import { colors, radius, spacing } from '@/lib/theme';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -31,6 +34,8 @@ type Profile = {
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 export default function ProfileScreen() {
+  const router = useRouter();
+
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState('');
 
@@ -55,7 +60,11 @@ export default function ProfileScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      // Profile is dark-themed — use light status-bar icons while focused,
+      // restore dark on blur so the still-light auth screens stay readable.
+      setStatusBarStyle('light');
       fetchProfile();
+      return () => setStatusBarStyle('dark');
     }, [])
   );
 
@@ -188,12 +197,18 @@ export default function ProfileScreen() {
     }
   }
 
+  // Clears the stored auth token/user and returns to the login screen.
+  async function handleLogout() {
+    await clearAuth();
+    router.replace('/(auth)/login');
+  }
+
   // ── Loading ─────────────────────────────────────────────────────────────────
 
   if (loading) {
     return (
       <SafeAreaView style={styles.centered}>
-        <ActivityIndicator size="large" color="#2563EB" />
+        <ActivityIndicator size="large" color={colors.accent} />
       </SafeAreaView>
     );
   }
@@ -201,7 +216,7 @@ export default function ProfileScreen() {
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
         <Text style={styles.heading}>Profile</Text>
 
@@ -210,17 +225,22 @@ export default function ProfileScreen() {
         {/* Streak summary */}
         <View style={styles.streakRow}>
           <View style={styles.streakBox}>
+            <Flame color={colors.support} size={20} />
             <Text style={styles.streakValue}>{profile?.tracking_streak ?? 0}</Text>
             <Text style={styles.streakLabel}>Tracking Streak</Text>
             <Text style={styles.streakUnit}>days</Text>
           </View>
           <View style={styles.streakDivider} />
           <View style={styles.streakBox}>
+            <Flame color={colors.support} size={20} />
             <Text style={styles.streakValue}>{profile?.goal_streak ?? 0}</Text>
             <Text style={styles.streakLabel}>Goal Streak</Text>
             <Text style={styles.streakUnit}>days</Text>
           </View>
         </View>
+
+        {/* Details section */}
+        <Text style={styles.sectionLabel}>Details</Text>
 
         {/* Email — read-only */}
         <Text style={styles.label}>Email</Text>
@@ -235,7 +255,7 @@ export default function ProfileScreen() {
           value={fullName}
           onChangeText={(v) => { setFullName(v); setSaveSuccess(false); }}
           placeholder="Your full name"
-          placeholderTextColor="#999"
+          placeholderTextColor={colors.placeholder}
           autoCapitalize="words"
         />
 
@@ -246,7 +266,7 @@ export default function ProfileScreen() {
           value={age}
           onChangeText={(v) => { setAge(v); setSaveSuccess(false); }}
           placeholder="e.g. 21"
-          placeholderTextColor="#999"
+          placeholderTextColor={colors.placeholder}
           keyboardType="number-pad"
         />
 
@@ -257,7 +277,7 @@ export default function ProfileScreen() {
           value={weightKg}
           onChangeText={(v) => { setWeightKg(v); setSaveSuccess(false); }}
           placeholder="e.g. 70.5"
-          placeholderTextColor="#999"
+          placeholderTextColor={colors.placeholder}
           keyboardType="decimal-pad"
         />
 
@@ -268,7 +288,7 @@ export default function ProfileScreen() {
           value={heightCm}
           onChangeText={(v) => { setHeightCm(v); setSaveSuccess(false); }}
           placeholder="e.g. 170"
-          placeholderTextColor="#999"
+          placeholderTextColor={colors.placeholder}
           keyboardType="decimal-pad"
         />
 
@@ -279,7 +299,7 @@ export default function ProfileScreen() {
           value={calorieGoal}
           onChangeText={(v) => { setCalorieGoal(v); setSaveSuccess(false); }}
           placeholder="e.g. 2000"
-          placeholderTextColor="#999"
+          placeholderTextColor={colors.placeholder}
           keyboardType="number-pad"
         />
 
@@ -326,6 +346,15 @@ export default function ProfileScreen() {
             )}
           </Pressable>
         ) : null}
+
+        {/* Account section — logout */}
+        <Text style={styles.sectionLabel}>Account</Text>
+        <Pressable
+          style={({ pressed }) => [styles.logoutButton, pressed && styles.pressed]}
+          onPress={handleLogout}>
+          <LogOut color={colors.danger} size={18} />
+          <Text style={styles.logoutText}>Log Out</Text>
+        </Pressable>
       </ScrollView>
     </SafeAreaView>
   );
@@ -336,119 +365,134 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: colors.bg,
   },
   centered: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#fff',
+    backgroundColor: colors.bg,
   },
   scroll: {
-    paddingHorizontal: 20,
-    paddingTop: 24,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
     paddingBottom: 48,
-    gap: 8,
+    gap: spacing.sm,
   },
   heading: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 8,
+    fontSize: 28,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    letterSpacing: 0.2,
+    marginBottom: spacing.xs,
+  },
+  sectionLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.textMuted,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginTop: spacing.lg,
+    marginBottom: spacing.xs,
   },
   streakRow: {
     flexDirection: 'row',
-    backgroundColor: '#F5F5F7',
-    borderRadius: 10,
-    marginBottom: 8,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    marginTop: spacing.xs,
     overflow: 'hidden',
   },
   streakBox: {
     flex: 1,
     alignItems: 'center',
-    paddingVertical: 14,
-    gap: 2,
+    paddingVertical: spacing.lg,
+    gap: 3,
   },
   streakDivider: {
     width: 1,
-    backgroundColor: '#E0E0E0',
-    marginVertical: 10,
+    backgroundColor: colors.border,
+    marginVertical: spacing.md,
   },
   streakValue: {
     fontSize: 28,
-    fontWeight: 'bold',
-    color: '#2563EB',
+    fontWeight: '700',
+    color: colors.support,
   },
   streakLabel: {
     fontSize: 12,
-    color: '#333',
+    color: colors.textPrimary,
     fontWeight: '600',
     textAlign: 'center',
   },
   streakUnit: {
     fontSize: 11,
-    color: '#888',
+    color: colors.textMuted,
   },
   label: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#333',
-    marginTop: 6,
+    color: colors.textMuted,
+    marginTop: spacing.sm,
   },
   readonlyField: {
-    backgroundColor: '#F5F5F7',
-    borderRadius: 8,
-    padding: 12,
+    backgroundColor: colors.elevated,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    padding: spacing.md,
   },
   readonlyText: {
     fontSize: 15,
-    color: '#555',
+    color: colors.textMuted,
   },
   input: {
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 8,
-    padding: 12,
+    borderColor: colors.inputBorder,
+    borderRadius: radius.sm,
+    padding: spacing.md,
     fontSize: 15,
-    color: '#000',
-    backgroundColor: '#fff',
+    color: colors.textPrimary,
+    backgroundColor: colors.inputBg,
   },
   warningCard: {
-    backgroundColor: '#FFF3CD',
-    borderColor: '#F0A500',
+    backgroundColor: colors.warningFill,
+    borderColor: 'rgba(244,184,96,0.4)',
     borderWidth: 1,
-    borderRadius: 8,
-    padding: 14,
-    gap: 12,
-    marginTop: 8,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+    gap: spacing.md,
+    marginTop: spacing.sm,
   },
   warningText: {
     fontSize: 14,
-    color: '#7A4F00',
+    color: colors.warning,
     lineHeight: 20,
   },
   warningButtons: {
     flexDirection: 'row',
-    gap: 10,
+    gap: spacing.md,
   },
   cancelButton: {
     flex: 1,
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 8,
-    paddingVertical: 10,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    paddingVertical: spacing.md,
     alignItems: 'center',
-    backgroundColor: '#fff',
+    backgroundColor: colors.elevated,
   },
   cancelButtonText: {
-    color: '#333',
+    color: colors.textPrimary,
     fontWeight: '600',
     fontSize: 14,
   },
   confirmButton: {
     flex: 1,
-    backgroundColor: '#DC2626',
-    borderRadius: 8,
-    paddingVertical: 10,
+    backgroundColor: colors.danger,
+    borderRadius: radius.sm,
+    paddingVertical: spacing.md,
     alignItems: 'center',
   },
   confirmButtonText: {
@@ -457,28 +501,43 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   saveButton: {
-    backgroundColor: '#2563EB',
-    borderRadius: 8,
+    backgroundColor: colors.accent,
+    borderRadius: radius.md,
     padding: 14,
     alignItems: 'center',
-    marginTop: 12,
+    marginTop: spacing.md,
   },
   saveButtonText: {
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
   },
+  logoutButton: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.danger,
+    borderRadius: radius.md,
+    padding: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  logoutText: {
+    color: colors.danger,
+    fontSize: 16,
+    fontWeight: '600',
+  },
   pressed: {
-    opacity: 0.7,
+    opacity: 0.6,
   },
   error: {
-    color: '#c0392b',
+    color: colors.danger,
     fontSize: 13,
-    marginTop: 4,
+    marginTop: spacing.xs,
   },
   success: {
-    color: '#16a34a',
+    color: colors.success,
     fontSize: 13,
-    marginTop: 4,
+    marginTop: spacing.xs,
   },
 });
