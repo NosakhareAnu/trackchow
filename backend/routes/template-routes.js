@@ -1,6 +1,7 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth-middleware');
+const { calculateNutrition } = require('../utils/nutrition-calculator');
 
 const router = express.Router();
 
@@ -8,7 +9,8 @@ const router = express.Router();
 router.use(authMiddleware);
 
 // POST /templates
-// Creates a meal template with one or more food items
+// Creates a meal template with one or more food items.
+// Optional item field serving_unit_id: if provided, grams_per_unit and total_grams are snapshotted.
 router.post('/', async (req, res) => {
   try {
     const { name, meal_type, items } = req.body;
@@ -35,6 +37,19 @@ router.post('/', async (req, res) => {
       }
     }
 
+    // Fetch serving unit gram data for any items that include a serving_unit_id
+    const servingUnitIds = [...new Set(items.map((i) => i.serving_unit_id).filter(Boolean))];
+    let servingUnitMap = {};
+    if (servingUnitIds.length > 0) {
+      const { data } = await supabase
+        .from('food_serving_units')
+        .select('id, grams')
+        .in('id', servingUnitIds);
+      for (const su of (data || [])) {
+        servingUnitMap[su.id] = su;
+      }
+    }
+
     // Create the template row
     const { data: template, error: templateError } = await supabase
       .from('meal_templates')
@@ -46,13 +61,23 @@ router.post('/', async (req, res) => {
       return res.status(500).json({ success: false, message: templateError.message });
     }
 
-    // Build template item rows and insert them
-    const templateItems = items.map((item) => ({
-      template_id: template.id,
-      food_item_id: item.food_item_id,
-      quantity: item.quantity,
-      quantity_unit: item.quantity_unit,
-    }));
+    // Build template item rows — snapshot serving unit gram data if available
+    const templateItems = items.map((item) => {
+      const qty = Number(item.quantity);
+      const servingUnit = item.serving_unit_id ? servingUnitMap[item.serving_unit_id] : null;
+      const gramsPerUnit = servingUnit ? Number(servingUnit.grams) : null;
+      const totalGrams = gramsPerUnit != null ? qty * gramsPerUnit : null;
+
+      return {
+        template_id: template.id,
+        food_item_id: item.food_item_id,
+        quantity: qty,
+        quantity_unit: item.quantity_unit,
+        serving_unit_id: item.serving_unit_id || null,
+        grams_per_unit: gramsPerUnit,
+        total_grams: totalGrams,
+      };
+    });
 
     const { data: insertedItems, error: itemsError } = await supabase
       .from('meal_template_items')
@@ -106,13 +131,16 @@ router.get('/', async (req, res) => {
 });
 
 // POST /templates/:id/log
-// Logs a meal from a template — fetches live food nutrition and creates a real meal log
+// Logs a meal from a template.
+// Recalculates nutrition using current per-100g food data + snapshotted grams_per_unit from the template.
+// Falls back to legacy serving-based calculation if per-100g data is absent.
 router.post('/:id/log', async (req, res) => {
   try {
     const userId = req.user.id;
     const templateId = req.params.id;
 
     // Fetch the template and verify it belongs to the current user
+    // Include serving_unit_id and grams_per_unit so we can use the snapshotted gram data
     const { data: template, error: templateError } = await supabase
       .from('meal_templates')
       .select(`
@@ -122,7 +150,9 @@ router.post('/:id/log', async (req, res) => {
         meal_template_items (
           quantity,
           quantity_unit,
-          food_item_id
+          food_item_id,
+          serving_unit_id,
+          grams_per_unit
         )
       `)
       .eq('id', templateId)
@@ -139,11 +169,11 @@ router.post('/:id/log', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Template has no items' });
     }
 
-    // Fetch current nutrition values for each food item in the template
+    // Fetch current food data — include per-100g fields for preferred calculation
     const foodIds = templateItems.map((item) => item.food_item_id);
     const { data: foodItems, error: foodError } = await supabase
       .from('food_items')
-      .select('id, calories, carbs_g, protein_g, fat_g, fiber_g')
+      .select('id, calories, carbs_g, protein_g, fat_g, fiber_g, calories_per_100g, carbs_per_100g, protein_per_100g, fat_per_100g, fiber_per_100g')
       .in('id', foodIds);
 
     if (foodError) {
@@ -171,21 +201,27 @@ router.post('/:id/log', async (req, res) => {
       return res.status(500).json({ success: false, message: logError.message });
     }
 
-    // Build meal_log_items rows using live food nutrition x quantity
+    // Build meal_log_items using current per-100g food data + snapshotted grams_per_unit from the template
     const logItemsToInsert = templateItems.map((item) => {
       const food = foodMap[item.food_item_id] || {};
-      const qty = item.quantity;
+      const qty = Number(item.quantity);
+      // Use the gram value snapshotted at template creation time
+      const gramsPerUnit = item.grams_per_unit != null ? Number(item.grams_per_unit) : null;
+      const nutrition = calculateNutrition(food, qty, gramsPerUnit);
 
       return {
         meal_log_id: mealLog.id,
         food_item_id: item.food_item_id,
         quantity: qty,
         quantity_unit: item.quantity_unit,
-        calories: (food.calories || 0) * qty,
-        carbs_g: (food.carbs_g || 0) * qty,
-        protein_g: (food.protein_g || 0) * qty,
-        fat_g: (food.fat_g || 0) * qty,
-        fiber_g: (food.fiber_g || 0) * qty,
+        serving_unit_id: item.serving_unit_id || null,
+        grams_per_unit: nutrition.grams_per_unit,
+        total_grams: nutrition.total_grams,
+        calories: nutrition.calories,
+        carbs_g: nutrition.carbs_g,
+        protein_g: nutrition.protein_g,
+        fat_g: nutrition.fat_g,
+        fiber_g: nutrition.fiber_g,
       };
     });
 

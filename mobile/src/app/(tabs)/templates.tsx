@@ -12,13 +12,35 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import api from '@/lib/api';
+import { getCachedServingUnits, saveCachedFood, saveCachedServingUnits } from '@/lib/food-cache';
+import { QUANTITY_UNITS } from '@/lib/portion-units';
+import { NutritionPreview } from '@/components/nutrition-preview';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type FoodItem = {
   id: string;
   name: string;
+  category?: string | null;
+  serving_unit?: string | null;
   calories: number;
+  carbs_g: number;
+  protein_g: number;
+  fat_g: number;
+  fiber_g: number;
+  calories_per_100g?: number | null;
+  carbs_per_100g?: number | null;
+  protein_per_100g?: number | null;
+  fat_per_100g?: number | null;
+  fiber_per_100g?: number | null;
+};
+
+type ServingUnit = {
+  id: string;
+  unit_name: string;
+  unit_type: 'conventional' | 'unconventional';
+  grams: number;
+  is_default: boolean;
 };
 
 type TemplateItem = {
@@ -36,22 +58,32 @@ type Template = {
   meal_template_items: TemplateItem[];
 };
 
+// ── Serving unit helpers ──────────────────────────────────────────────────────
+
+const GRAM_UNIT: ServingUnit = { id: '__g__', unit_name: 'g', unit_type: 'conventional', grams: 1, is_default: false };
+const ML_UNIT: ServingUnit = { id: '__ml__', unit_name: 'ml', unit_type: 'conventional', grams: 1, is_default: false };
+
+const LIQUID_CATEGORIES = ['drink', 'liquid', 'beverage', 'soup'];
+const LIQUID_UNIT_NAMES = ['cup', 'bottle', 'glass', 'ml'];
+
+function withGramUnits(units: ServingUnit[], food?: FoodItem | null): ServingUnit[] {
+  const result = [...units];
+  const names = result.map((u) => u.unit_name.toLowerCase());
+
+  if (!names.includes('g')) result.push(GRAM_UNIT);
+
+  const category = food?.category?.toLowerCase() ?? '';
+  const isLiquid = LIQUID_CATEGORIES.some((c) => category.includes(c));
+  const hasLiquidUnit = LIQUID_UNIT_NAMES.some((n) => names.includes(n));
+
+  if ((isLiquid || hasLiquidUnit) && !names.includes('ml')) result.push(ML_UNIT);
+
+  return result;
+}
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const MEAL_TYPES = ['breakfast', 'lunch', 'dinner', 'snack'];
-
-const QUANTITY_UNITS = [
-  'plate',
-  'scoop',
-  'serving spoon',
-  'takeaway pack',
-  'wrap',
-  'piece',
-  'bottle',
-  'cup',
-  'bowl',
-  'portion',
-];
 
 // ── View modes ────────────────────────────────────────────────────────────────
 
@@ -74,6 +106,11 @@ export default function TemplatesScreen() {
   const [createLoading, setCreateLoading] = useState(false);
   const [createError, setCreateError] = useState('');
   const [createSuccess, setCreateSuccess] = useState('');
+
+  // Serving units for the selected food
+  const [servingUnits, setServingUnits] = useState<ServingUnit[]>([]);
+  const [servingUnitsLoading, setServingUnitsLoading] = useState(false);
+  const [selectedServingUnit, setSelectedServingUnit] = useState<ServingUnit | null>(null);
 
   // Food picker state
   const [foods, setFoods] = useState<FoodItem[]>([]);
@@ -125,6 +162,31 @@ export default function TemplatesScreen() {
     }
   }
 
+  // Fetches serving units, caches real DB units, appends synthetic g/ml units, auto-selects.
+  // On failure, tries cached units; falls back to empty (g/ml chips still show).
+  async function fetchServingUnits(foodId: string, food: FoodItem) {
+    setServingUnitsLoading(true);
+    try {
+      const res = await api.get(`/foods/${foodId}/serving-units`);
+      const rawUnits = res.data.data ?? [];
+      await saveCachedServingUnits(foodId, rawUnits);
+      const units = withGramUnits(rawUnits, food);
+      setServingUnits(units);
+      const defaultUnit = units.find((u) => u.is_default) ?? units[0] ?? null;
+      setSelectedServingUnit(defaultUnit);
+      if (defaultUnit) setQuantityUnit(defaultUnit.unit_name);
+    } catch {
+      const cached = await getCachedServingUnits(foodId);
+      const units = withGramUnits(cached, food);
+      setServingUnits(units);
+      const defaultUnit = units.find((u) => u.is_default) ?? units[0] ?? null;
+      setSelectedServingUnit(defaultUnit);
+      if (defaultUnit) setQuantityUnit(defaultUnit.unit_name);
+    } finally {
+      setServingUnitsLoading(false);
+    }
+  }
+
   // ── Actions ─────────────────────────────────────────────────────────────────
 
   function openFoodPicker() {
@@ -134,8 +196,22 @@ export default function TemplatesScreen() {
   }
 
   function selectFood(food: FoodItem) {
+    saveCachedFood(food);
     setSelectedFood(food);
+    fetchServingUnits(food.id, food);
     setMode('create');
+  }
+
+  function resetCreateForm() {
+    setTemplateName('');
+    setMealType('breakfast');
+    setSelectedFood(null);
+    setQuantity('1');
+    setQuantityUnit('plate');
+    setServingUnits([]);
+    setSelectedServingUnit(null);
+    setCreateError('');
+    setCreateSuccess('');
   }
 
   async function handleCreateTemplate() {
@@ -156,25 +232,24 @@ export default function TemplatesScreen() {
       return;
     }
 
+    const itemPayload: Record<string, unknown> = {
+      food_item_id: selectedFood.id,
+      quantity: qty,
+      quantity_unit: quantityUnit,
+    };
+    // Virtual g/ml units (id starts with '__') are not real DB rows — omit serving_unit_id
+    if (selectedServingUnit && !selectedServingUnit.id.startsWith('__')) {
+      itemPayload.serving_unit_id = selectedServingUnit.id;
+    }
+
     setCreateLoading(true);
     try {
       await api.post('/templates', {
         name: templateName.trim(),
         meal_type: mealType,
-        items: [
-          {
-            food_item_id: selectedFood.id,
-            quantity: qty,
-            quantity_unit: quantityUnit,
-          },
-        ],
+        items: [itemPayload],
       });
-      // Reset form and return to list
-      setTemplateName('');
-      setMealType('breakfast');
-      setSelectedFood(null);
-      setQuantity('1');
-      setQuantityUnit('plate');
+      resetCreateForm();
       setCreateSuccess('Template created successfully.');
       await fetchTemplates();
       setMode('list');
@@ -251,6 +326,10 @@ export default function TemplatesScreen() {
   // ── Create template view ────────────────────────────────────────────────────
 
   if (mode === 'create') {
+    const conventionalUnits = servingUnits.filter((u) => u.unit_type === 'conventional');
+    const unconventionalUnits = servingUnits.filter((u) => u.unit_type === 'unconventional');
+    const gramsPerUnit = selectedServingUnit?.grams ?? null;
+
     return (
       <SafeAreaView style={styles.container}>
         <ScrollView contentContainerStyle={styles.scroll}>
@@ -298,19 +377,76 @@ export default function TemplatesScreen() {
             placeholderTextColor="#999"
           />
 
+          {/* Serving unit picker — dynamic from API, grouped by type */}
           <Text style={styles.label}>Unit</Text>
-          <View style={styles.chipRow}>
-            {QUANTITY_UNITS.map((unit) => (
-              <Pressable
-                key={unit}
-                style={[styles.chip, quantityUnit === unit && styles.chipSelected]}
-                onPress={() => setQuantityUnit(unit)}>
-                <Text style={[styles.chipText, quantityUnit === unit && styles.chipTextSelected]}>
-                  {unit}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
+          {servingUnitsLoading ? (
+            <ActivityIndicator color="#2563EB" size="small" style={{ alignSelf: 'flex-start' }} />
+          ) : servingUnits.length > 0 ? (
+            <>
+              {conventionalUnits.length > 0 && (
+                <>
+                  <Text style={styles.unitGroupLabel}>Conventional</Text>
+                  <View style={styles.chipRow}>
+                    {conventionalUnits.map((u) => (
+                      <Pressable
+                        key={u.id}
+                        style={[styles.chip, selectedServingUnit?.id === u.id && styles.chipSelected]}
+                        onPress={() => {
+                          setSelectedServingUnit(u);
+                          setQuantityUnit(u.unit_name);
+                        }}>
+                        <Text style={[styles.chipText, selectedServingUnit?.id === u.id && styles.chipTextSelected]}>
+                          {u.unit_name}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </>
+              )}
+              {unconventionalUnits.length > 0 && (
+                <>
+                  <Text style={styles.unitGroupLabel}>Unconventional</Text>
+                  <View style={styles.chipRow}>
+                    {unconventionalUnits.map((u) => (
+                      <Pressable
+                        key={u.id}
+                        style={[styles.chip, selectedServingUnit?.id === u.id && styles.chipSelected]}
+                        onPress={() => {
+                          setSelectedServingUnit(u);
+                          setQuantityUnit(u.unit_name);
+                        }}>
+                        <Text style={[styles.chipText, selectedServingUnit?.id === u.id && styles.chipTextSelected]}>
+                          {u.unit_name}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </>
+              )}
+            </>
+          ) : (
+            // Fallback — food has no serving units defined in the database yet
+            <View style={styles.chipRow}>
+              {QUANTITY_UNITS.map((unit) => (
+                <Pressable
+                  key={unit}
+                  style={[styles.chip, quantityUnit === unit && styles.chipSelected]}
+                  onPress={() => setQuantityUnit(unit)}>
+                  <Text style={[styles.chipText, quantityUnit === unit && styles.chipTextSelected]}>
+                    {unit}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          )}
+
+          {/* Live nutrition preview */}
+          <NutritionPreview
+            food={selectedFood}
+            quantity={parseFloat(quantity) || 0}
+            unit={quantityUnit}
+            gramsPerUnit={gramsPerUnit}
+          />
 
           {createError ? <Text style={styles.error}>{createError}</Text> : null}
 
@@ -328,7 +464,7 @@ export default function TemplatesScreen() {
           <Pressable
             style={({ pressed }) => [styles.ghostButton, pressed && styles.pressed]}
             onPress={() => {
-              setCreateError('');
+              resetCreateForm();
               setMode('list');
             }}>
             <Text style={styles.ghostButtonText}>← Cancel</Text>
@@ -348,8 +484,7 @@ export default function TemplatesScreen() {
           <Pressable
             style={({ pressed }) => [styles.createButton, pressed && styles.pressed]}
             onPress={() => {
-              setCreateError('');
-              setCreateSuccess('');
+              resetCreateForm();
               setMode('create');
             }}>
             <Text style={styles.createButtonText}>+ New</Text>
@@ -489,6 +624,15 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#333',
     marginTop: 4,
+  },
+  unitGroupLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#aaa',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginTop: 4,
+    marginBottom: 2,
   },
   input: {
     borderWidth: 1,

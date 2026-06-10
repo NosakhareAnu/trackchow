@@ -32,4 +32,29 @@ router.get('/', async (req, res) => {
   }
 });
 
+// GET /foods/:id/serving-units
+// Returns all serving units for a food item.
+// Order: default first, then conventional, then unconventional, then alphabetical.
+router.get('/:id/serving-units', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data, error } = await supabase
+      .from('food_serving_units')
+      .select('id, unit_name, unit_type, grams, is_default')
+      .eq('food_item_id', id)
+      .order('is_default', { ascending: false })   // true first
+      .order('unit_type', { ascending: true })      // 'conventional' before 'unconventional'
+      .order('unit_name', { ascending: true });
+
+    if (error) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+
+    return res.json({ success: true, data: data || [] });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 module.exports = router;

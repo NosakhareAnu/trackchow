@@ -9,6 +9,8 @@ const mealLogRoutes = require('./routes/meal-log-routes');
 const summaryRoutes = require('./routes/summary-routes');
 const templateRoutes = require('./routes/template-routes');
 const syncRoutes = require('./routes/sync-routes');
+const profileRoutes = require('./routes/profile-routes');
+const aiRoutes = require('./routes/ai-routes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -29,6 +31,8 @@ app.use('/meal-logs', mealLogRoutes);
 app.use('/summary', summaryRoutes);
 app.use('/templates', templateRoutes);
 app.use('/sync', syncRoutes);
+app.use('/profile', profileRoutes);
+app.use('/ai', aiRoutes);
 
 app.listen(PORT, () => {
   console.log(`TrackChow backend running on port ${PORT}`);

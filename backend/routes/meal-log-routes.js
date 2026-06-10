@@ -1,22 +1,72 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth-middleware');
+const { updateTrackingStreak, updateGoalStreak } = require('../lib/streak-helpers');
+const { calculateNutrition } = require('../utils/nutrition-calculator');
 
 const router = express.Router();
 
 // All routes in this file require a valid Bearer token
 router.use(authMiddleware);
 
+// Builds meal_log_items rows for an array of request items.
+// foodMap: { [food_item_id]: food_row }
+// servingUnitMap: { [serving_unit_id]: { id, grams } }
+function buildItemRows(items, foodMap, servingUnitMap) {
+  return items.map((item) => {
+    const food = foodMap[item.food_item_id];
+    const qty = Number(item.quantity);
+    const servingUnit = item.serving_unit_id ? servingUnitMap[item.serving_unit_id] : null;
+    const gramsPerUnit = servingUnit ? Number(servingUnit.grams) : null;
+    const nutrition = calculateNutrition(food, qty, gramsPerUnit);
+    return {
+      food_item_id: item.food_item_id,
+      quantity: qty,
+      quantity_unit: item.quantity_unit,
+      serving_unit_id: item.serving_unit_id || null,
+      grams_per_unit: nutrition.grams_per_unit,
+      total_grams: nutrition.total_grams,
+      calories: nutrition.calories,
+      carbs_g: nutrition.carbs_g,
+      protein_g: nutrition.protein_g,
+      fat_g: nutrition.fat_g,
+      fiber_g: nutrition.fiber_g,
+    };
+  });
+}
+
+// Fetches food_serving_units rows for the given ids and returns a map keyed by id.
+async function fetchServingUnitMap(servingUnitIds) {
+  if (!servingUnitIds || servingUnitIds.length === 0) return {};
+  const { data } = await supabase
+    .from('food_serving_units')
+    .select('id, grams')
+    .in('id', servingUnitIds);
+  const map = {};
+  for (const su of (data || [])) {
+    map[su.id] = su;
+  }
+  return map;
+}
+
 // POST /meal-logs
-// Creates a meal log with one or more food items
+// Creates a meal log with one or more food items.
+// Optional item field serving_unit_id: if provided, nutrition is calculated via per-100g + gram mapping.
+// Optional body field log_date (YYYY-MM-DD) sets which date the meal belongs to.
+// If omitted the meal is stamped with the current server time (today).
 router.post('/', async (req, res) => {
   try {
-    const { meal_type, items, notes } = req.body;
+    const { meal_type, items, notes, log_date } = req.body;
     const userId = req.user.id;
 
     // Validate required fields
     if (!meal_type) {
       return res.status(400).json({ success: false, message: 'meal_type is required' });
+    }
+
+    // Validate log_date format when provided
+    if (log_date && !/^\d{4}-\d{2}-\d{2}$/.test(log_date)) {
+      return res.status(400).json({ success: false, message: 'Invalid log_date format. Use YYYY-MM-DD' });
     }
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ success: false, message: 'items must be a non-empty array' });
@@ -32,11 +82,11 @@ router.post('/', async (req, res) => {
       }
     }
 
-    // Fetch all referenced food items in one query
+    // Fetch all referenced food items in one query — include per-100g fields for preferred calculation
     const foodIds = items.map((item) => item.food_item_id);
     const { data: foodItems, error: foodError } = await supabase
       .from('food_items')
-      .select('id, name, calories, carbs_g, protein_g, fat_g, fiber_g')
+      .select('id, name, calories, carbs_g, protein_g, fat_g, fiber_g, calories_per_100g, carbs_per_100g, protein_per_100g, fat_per_100g, fiber_per_100g')
       .in('id', foodIds);
 
     if (foodError) {
@@ -59,31 +109,29 @@ router.post('/', async (req, res) => {
       }
     }
 
-    // Build item rows with per-item nutrition calculated from food_items values x quantity
-    const logItemsToInsert = items.map((item) => {
-      const food = foodMap[item.food_item_id];
-      const qty = item.quantity;
+    // Fetch serving unit gram data for any items that include a serving_unit_id
+    const servingUnitIds = [...new Set(items.map((i) => i.serving_unit_id).filter(Boolean))];
+    const servingUnitMap = await fetchServingUnitMap(servingUnitIds);
 
-      return {
-        food_item_id: item.food_item_id,
-        quantity: qty,
-        quantity_unit: item.quantity_unit,
-        calories: (food.calories || 0) * qty,
-        carbs_g: (food.carbs_g || 0) * qty,
-        protein_g: (food.protein_g || 0) * qty,
-        fat_g: (food.fat_g || 0) * qty,
-        fiber_g: (food.fiber_g || 0) * qty,
-      };
-    });
+    // Build item rows — uses per-100g calculation when data is available, falls back to legacy
+    const logItemsToInsert = buildItemRows(items, foodMap, servingUnitMap);
+
+    // Build the meal_logs insert payload.
+    // When log_date is provided, pin created_at to noon UTC on that date so the
+    // meal falls inside the correct day window for all date-range queries.
+    const mealLogInsert = {
+      user_id: userId,
+      meal_type,
+      notes: notes || null,
+    };
+    if (log_date) {
+      mealLogInsert.created_at = `${log_date}T12:00:00.000Z`;
+    }
 
     // Create the meal log row — nutrition totals live in meal_log_items, not here
     const { data: mealLog, error: logError } = await supabase
       .from('meal_logs')
-      .insert({
-        user_id: userId,
-        meal_type,
-        notes: notes || null,
-      })
+      .insert(mealLogInsert)
       .select('*')
       .single();
 
@@ -106,6 +154,13 @@ router.post('/', async (req, res) => {
       return res.status(500).json({ success: false, message: itemsError.message });
     }
 
+    // Update streaks — errors here must not affect the response
+    const logDateStr = mealLog.created_at.split('T')[0];
+    await Promise.all([
+      updateTrackingStreak(supabase, userId, logDateStr).catch(() => {}),
+      updateGoalStreak(supabase, userId, logDateStr).catch(() => {}),
+    ]);
+
     return res.status(201).json({
       success: true,
       data: { ...mealLog, items: insertedItems },
@@ -115,8 +170,56 @@ router.post('/', async (req, res) => {
   }
 });
 
+// GET /meal-logs?date=YYYY-MM-DD (optional, defaults to today)
+// Returns the current user's meal logs for a given date, with items and food names
+router.get('/', async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const dateStr = req.query.date || new Date().toISOString().split('T')[0];
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+      return res.status(400).json({ success: false, message: 'Invalid date format. Use YYYY-MM-DD' });
+    }
+
+    const startOfDay = `${dateStr}T00:00:00.000Z`;
+    const endOfDay = `${dateStr}T23:59:59.999Z`;
+
+    const { data: logs, error } = await supabase
+      .from('meal_logs')
+      .select(`
+        id,
+        meal_type,
+        notes,
+        created_at,
+        meal_log_items (
+          id,
+          quantity,
+          quantity_unit,
+          calories,
+          carbs_g,
+          protein_g,
+          fat_g,
+          fiber_g,
+          food_items ( id, name )
+        )
+      `)
+      .eq('user_id', userId)
+      .gte('created_at', startOfDay)
+      .lte('created_at', endOfDay)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+
+    return res.json({ success: true, data: logs });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 // GET /meal-logs/today
-// Returns the current user's meal logs for today, with items and food names
+// Kept for backwards compatibility — same as GET /meal-logs?date=<today>
 router.get('/today', async (req, res) => {
   try {
     const userId = req.user.id;
@@ -167,10 +270,10 @@ router.delete('/:id', async (req, res) => {
     const userId = req.user.id;
     const { id } = req.params;
 
-    // Verify ownership before deleting
+    // Verify ownership before deleting — also grab created_at for streak recalc
     const { data: existing, error: findError } = await supabase
       .from('meal_logs')
-      .select('id')
+      .select('id, created_at')
       .eq('id', id)
       .eq('user_id', userId)
       .single();
@@ -190,6 +293,10 @@ router.delete('/:id', async (req, res) => {
     if (deleteError) {
       return res.status(500).json({ success: false, message: deleteError.message });
     }
+
+    // Recalculate goal streak for the deleted log's date
+    const logDateStr = existing.created_at.split('T')[0];
+    await updateGoalStreak(supabase, userId, logDateStr).catch(() => {});
 
     return res.json({ success: true, message: 'Meal log deleted' });
   } catch (err) {
@@ -212,10 +319,10 @@ router.put('/:id', async (req, res) => {
       return res.status(400).json({ success: false, message: 'items must be a non-empty array' });
     }
 
-    // Verify ownership
+    // Verify ownership — also grab created_at for streak recalc
     const { data: existing, error: findError } = await supabase
       .from('meal_logs')
-      .select('id')
+      .select('id, created_at')
       .eq('id', id)
       .eq('user_id', userId)
       .single();
@@ -224,11 +331,11 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ success: false, message: 'Meal log not found' });
     }
 
-    // Fetch current nutrition values for the submitted food items
+    // Fetch current food data — include per-100g fields for preferred calculation
     const foodIds = items.map((item) => item.food_item_id);
     const { data: foodItems, error: foodError } = await supabase
       .from('food_items')
-      .select('id, calories, carbs_g, protein_g, fat_g, fiber_g')
+      .select('id, calories, carbs_g, protein_g, fat_g, fiber_g, calories_per_100g, carbs_per_100g, protein_per_100g, fat_per_100g, fiber_per_100g')
       .in('id', foodIds);
 
     if (foodError) {
@@ -249,6 +356,10 @@ router.put('/:id', async (req, res) => {
       }
     }
 
+    // Fetch serving unit gram data for any items that include a serving_unit_id
+    const servingUnitIds = [...new Set(items.map((i) => i.serving_unit_id).filter(Boolean))];
+    const servingUnitMap = await fetchServingUnitMap(servingUnitIds);
+
     // Update the meal_logs row
     const { data: updatedLog, error: updateError } = await supabase
       .from('meal_logs')
@@ -264,21 +375,10 @@ router.put('/:id', async (req, res) => {
     // Replace all items: delete existing, then insert the new set
     await supabase.from('meal_log_items').delete().eq('meal_log_id', id);
 
-    const newItems = items.map((item) => {
-      const food = foodMap[item.food_item_id];
-      const qty = item.quantity;
-      return {
-        meal_log_id: id,
-        food_item_id: item.food_item_id,
-        quantity: qty,
-        quantity_unit: item.quantity_unit,
-        calories: (food.calories || 0) * qty,
-        carbs_g: (food.carbs_g || 0) * qty,
-        protein_g: (food.protein_g || 0) * qty,
-        fat_g: (food.fat_g || 0) * qty,
-        fiber_g: (food.fiber_g || 0) * qty,
-      };
-    });
+    const newItems = buildItemRows(items, foodMap, servingUnitMap).map((item) => ({
+      ...item,
+      meal_log_id: id,
+    }));
 
     const { data: insertedItems, error: itemsError } = await supabase
       .from('meal_log_items')
@@ -288,6 +388,10 @@ router.put('/:id', async (req, res) => {
     if (itemsError) {
       return res.status(500).json({ success: false, message: itemsError.message });
     }
+
+    // Recalculate goal streak for this log's date (items changed, total calories may have changed)
+    const logDateStr = existing.created_at.split('T')[0];
+    await updateGoalStreak(supabase, userId, logDateStr).catch(() => {});
 
     return res.json({ success: true, data: { ...updatedLog, items: insertedItems } });
   } catch (err) {

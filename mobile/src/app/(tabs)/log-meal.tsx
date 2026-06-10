@@ -1,5 +1,5 @@
-import { useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -13,41 +13,118 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import api from '@/lib/api';
-import { savePendingLog } from '@/lib/offline-sync';
+import { setFlash } from '@/lib/flash-message';
+import {
+  getCachedServingUnits,
+  saveCachedFood,
+  saveCachedServingUnits,
+  searchCachedFoods,
+} from '@/lib/food-cache';
+import { savePendingLog, PendingItem } from '@/lib/offline-sync';
+import { QUANTITY_UNITS } from '@/lib/portion-units';
+import { getRecentFoods, saveRecentFood, type RecentFood } from '@/lib/recent-foods';
+import { NutritionPreview } from '@/components/nutrition-preview';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type FoodItem = {
   id: string;
   name: string;
+  category?: string | null;
   serving_unit: string | null;
   calories: number;
   carbs_g: number;
   protein_g: number;
   fat_g: number;
+  fiber_g: number;
+  calories_per_100g?: number | null;
+  carbs_per_100g?: number | null;
+  protein_per_100g?: number | null;
+  fat_per_100g?: number | null;
+  fiber_per_100g?: number | null;
 };
+
+type ServingUnit = {
+  id: string;
+  unit_name: string;
+  unit_type: 'conventional' | 'unconventional';
+  grams: number;
+  is_default: boolean;
+};
+
+// ── Serving unit helpers ──────────────────────────────────────────────────────
+
+// Synthetic units appended client-side so users can always log exact weight.
+// id starts with '__' so the submit handler knows not to send serving_unit_id.
+const GRAM_UNIT: ServingUnit = { id: '__g__', unit_name: 'g', unit_type: 'conventional', grams: 1, is_default: false };
+const ML_UNIT: ServingUnit = { id: '__ml__', unit_name: 'ml', unit_type: 'conventional', grams: 1, is_default: false };
+
+const LIQUID_CATEGORIES = ['drink', 'liquid', 'beverage', 'soup'];
+const LIQUID_UNIT_NAMES = ['cup', 'bottle', 'glass', 'ml'];
+
+// Ensures 'g' is always in the list. Adds 'ml' for drink-like foods or when
+// the backend already returns liquid units (cup, bottle, glass). No duplicates.
+function withGramUnits(units: ServingUnit[], food?: FoodItem | null): ServingUnit[] {
+  const result = [...units];
+  const names = result.map((u) => u.unit_name.toLowerCase());
+
+  if (!names.includes('g')) result.push(GRAM_UNIT);
+
+  const category = food?.category?.toLowerCase() ?? '';
+  const isLiquid = LIQUID_CATEGORIES.some((c) => category.includes(c));
+  const hasLiquidUnit = LIQUID_UNIT_NAMES.some((n) => names.includes(n));
+
+  if ((isLiquid || hasLiquidUnit) && !names.includes('ml')) result.push(ML_UNIT);
+
+  return result;
+}
+
+// Controls which step the AI food search flow is in.
+// 'none'    — not shown
+// 'confirm' — confirmation card shown before making the API call
+// 'loading' — POST /ai/food-search in progress
+// 'error'   — call failed or AI was not confident
+type AiStep = 'none' | 'confirm' | 'loading' | 'error';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const MEAL_TYPES = ['breakfast', 'lunch', 'dinner', 'snack'];
 
-const QUANTITY_UNITS = [
-  'plate',
-  'scoop',
-  'serving spoon',
-  'takeaway pack',
-  'wrap',
-  'piece',
-  'bottle',
-  'cup',
-  'bowl',
-  'portion',
-];
+// ── Date helpers (local-time only, no toISOString) ────────────────────────────
+
+function localDateStr(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function todayStr(): string {
+  return localDateStr(new Date());
+}
+
+function addOneDayStr(dateStr: string): string {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  return localDateStr(new Date(year, month - 1, day + 1));
+}
+
+function formatLogDateLabel(dateStr: string): string {
+  const today = todayStr();
+  if (dateStr === today) return 'Today';
+  if (dateStr === addOneDayStr(today)) return 'Tomorrow';
+  const [year, month, day] = dateStr.split('-').map(Number);
+  return new Date(year, month - 1, day).toLocaleDateString('en-GB', {
+    day: 'numeric', month: 'short', year: 'numeric',
+  });
+}
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 export default function LogMealScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ date?: string }>();
+
+  const [logDate, setLogDate] = useState(params.date || todayStr());
 
   // Food search state
   const [searchQuery, setSearchQuery] = useState('');
@@ -55,31 +132,73 @@ export default function LogMealScreen() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState('');
 
+  // Recent foods loaded from AsyncStorage — shown when search is empty
+  const [recentFoods, setRecentFoods] = useState<RecentFood[]>([]);
+
+  // AI search step and error text
+  const [aiStep, setAiStep] = useState<AiStep>('none');
+  const [aiError, setAiError] = useState('');
+
   // Selected food and log options
   const [selectedFood, setSelectedFood] = useState<FoodItem | null>(null);
   const [mealType, setMealType] = useState('lunch');
   const [quantity, setQuantity] = useState('1');
   const [quantityUnit, setQuantityUnit] = useState('plate');
 
+  // Serving units for the selected food
+  const [servingUnits, setServingUnits] = useState<ServingUnit[]>([]);
+  const [servingUnitsLoading, setServingUnitsLoading] = useState(false);
+  const [selectedServingUnit, setSelectedServingUnit] = useState<ServingUnit | null>(null);
+
+  // True when food search results are coming from the local cache (offline fallback).
+  const [offlineFoodSearch, setOfflineFoodSearch] = useState(false);
+
   // Submission state
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
-  const [success, setSuccess] = useState(false);
-  const [savedOffline, setSavedOffline] = useState(false);
 
-  // Debounce timer ref so we don't fire a request on every keystroke
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set to true after a successful log so useFocusEffect resets the form on return.
+  const justLoggedRef = useRef(false);
 
-  // Load all foods on mount
-  useEffect(() => {
-    fetchFoods('');
-  }, []);
+  // Reload logDate and recent foods on every tab focus.
+  // Also resets the form when returning after a successful log (justLoggedRef).
+  useFocusEffect(
+    useCallback(() => {
+      setLogDate(params.date || todayStr());
+      getRecentFoods().then(setRecentFoods);
+      if (justLoggedRef.current) {
+        justLoggedRef.current = false;
+        setSelectedFood(null);
+        setServingUnits([]);
+        setSelectedServingUnit(null);
+        setServingUnitsLoading(false);
+        setQuantity('1');
+        setQuantityUnit('plate');
+        setMealType('lunch');
+        setSearchQuery('');
+        setFoods([]);
+        setOfflineFoodSearch(false);
+        setSubmitError('');
+        setAiStep('none');
+        setAiError('');
+      }
+    }, [params.date])
+  );
 
-  // Re-fetch whenever search query changes, with a short debounce
+  // Debounced food search — only fires when the query is ≥ 2 characters.
+  // Clears results and resets the AI step on every keystroke so stale state
+  // from a previous "no results" search doesn't linger.
   useEffect(() => {
+    setAiStep('none');
     if (debounceRef.current) clearTimeout(debounceRef.current);
+    const trimmed = searchQuery.trim();
+    if (trimmed.length < 2) {
+      setFoods([]);
+      return;
+    }
     debounceRef.current = setTimeout(() => {
-      fetchFoods(searchQuery.trim());
+      fetchFoods(trimmed);
     }, 400);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -88,15 +207,103 @@ export default function LogMealScreen() {
 
   async function fetchFoods(query: string) {
     setSearchError('');
+    setOfflineFoodSearch(false);
     setSearchLoading(true);
     try {
-      const params = query ? { search: query } : {};
-      const res = await api.get('/foods', { params });
+      const res = await api.get('/foods', { params: { search: query } });
       setFoods(res.data.data ?? []);
-    } catch {
-      setSearchError('Could not load foods. Check your connection.');
+    } catch (err: any) {
+      if (!err.response) {
+        // Network/offline error — fall back to local food cache.
+        const cached = await searchCachedFoods(query);
+        setFoods(cached);
+        setOfflineFoodSearch(true);
+        if (cached.length === 0) {
+          setSearchError('');  // no error text — UI handles this with offlineFoodSearch flag
+        }
+      } else {
+        setSearchError('Could not load foods. Check your connection.');
+      }
     } finally {
       setSearchLoading(false);
+    }
+  }
+
+  // Fetches serving units for a food item, caches the real DB units, adds synthetic
+  // g/ml units, and auto-selects the default. On failure, tries the local cache.
+  async function fetchServingUnits(foodId: string, food: FoodItem) {
+    setServingUnitsLoading(true);
+    try {
+      const res = await api.get(`/foods/${foodId}/serving-units`);
+      const rawUnits = res.data.data ?? [];
+      // Cache real DB units (virtual __g__/__ml__ are excluded inside saveCachedServingUnits)
+      await saveCachedServingUnits(foodId, rawUnits);
+      const units = withGramUnits(rawUnits, food);
+      setServingUnits(units);
+      const defaultUnit = units.find((u) => u.is_default) ?? units[0] ?? null;
+      setSelectedServingUnit(defaultUnit);
+      if (defaultUnit) setQuantityUnit(defaultUnit.unit_name);
+    } catch {
+      // Offline — try cached serving units, then fall back to empty (g/ml chips still show)
+      const cached = await getCachedServingUnits(foodId);
+      const units = withGramUnits(cached, food);
+      setServingUnits(units);
+      const defaultUnit = units.find((u) => u.is_default) ?? units[0] ?? null;
+      setSelectedServingUnit(defaultUnit);
+      if (defaultUnit) setQuantityUnit(defaultUnit.unit_name);
+    } finally {
+      setServingUnitsLoading(false);
+    }
+  }
+
+  // Selects a food and loads its serving units (with g/ml always appended).
+  // Pass preloadedUnits (from AI response) to skip the extra fetch.
+  function handleSelectFood(food: FoodItem, preloadedUnits?: ServingUnit[]) {
+    // Cache so the food is available offline next time.
+    saveCachedFood(food);
+    setSelectedFood(food);
+    if (preloadedUnits !== undefined) {
+      const enriched = withGramUnits(preloadedUnits, food);
+      setServingUnits(enriched);
+      const defaultUnit = enriched.find((u) => u.is_default) ?? enriched[0] ?? null;
+      setSelectedServingUnit(defaultUnit);
+      if (defaultUnit) setQuantityUnit(defaultUnit.unit_name);
+      // Cache the AI-returned serving units so they are available offline next time.
+      // saveCachedServingUnits filters out virtual __g__/__ml__ units automatically.
+      saveCachedServingUnits(food.id, preloadedUnits);
+    } else {
+      fetchServingUnits(food.id, food);
+    }
+  }
+
+  // Called when the user confirms the AI search card.
+  // Calls POST /ai/food-search, then selects the returned food on success.
+  async function handleAiSearch() {
+    const query = searchQuery.trim();
+    setAiStep('loading');
+    setAiError('');
+    try {
+      const res = await api.post('/ai/food-search', { query });
+      const { success, food, serving_units, limitReached, message } = res.data;
+      if (!success) {
+        setAiError(
+          limitReached
+            ? 'Daily AI search limit reached. Try again tomorrow.'
+            : message || 'Could not estimate this food. Try a simpler name.'
+        );
+        setAiStep('error');
+        return;
+      }
+      // Use the food and serving units returned by the backend directly —
+      // avoids an extra GET /foods/:id/serving-units round trip.
+      handleSelectFood(food, serving_units ?? []);
+    } catch (err: any) {
+      if (!err.response) {
+        setAiError('AI search requires internet connection.');
+      } else {
+        setAiError('Could not estimate this food. Try a simpler name.');
+      }
+      setAiStep('error');
     }
   }
 
@@ -112,18 +319,33 @@ export default function LogMealScreen() {
     setSubmitError('');
     setSubmitting(true);
 
-    const items = [{ food_item_id: selectedFood.id, quantity: qty, quantity_unit: quantityUnit }];
+    // PendingItem type covers both the online POST payload and the offline savePendingLog call.
+    // food_name is local-display only; the backend ignores it (destructures only food_item_id etc).
+    const itemPayload: PendingItem = {
+      food_item_id: selectedFood.id,
+      quantity: qty,
+      quantity_unit: quantityUnit,
+      food_name: selectedFood.name,
+    };
+    // Virtual g/ml units (id starts with '__') are not real DB rows — omit serving_unit_id
+    if (selectedServingUnit && !selectedServingUnit.id.startsWith('__')) {
+      itemPayload.serving_unit_id = selectedServingUnit.id;
+    }
+    const items = [itemPayload];
 
     try {
-      await api.post('/meal-logs', { meal_type: mealType, items });
-      setSuccess(true);
+      await api.post('/meal-logs', { meal_type: mealType, items, log_date: logDate });
+      await saveRecentFood(selectedFood);
+      justLoggedRef.current = true;
+      setFlash(`${selectedFood.name} was added to ${mealType}.`, 'online', logDate);
+      router.replace('/(tabs)/dashboard');
     } catch (err: any) {
-      // No response means the device is offline or the server is unreachable.
-      // Save the log locally so it can be synced later.
       if (!err.response) {
-        await savePendingLog(mealType, items);
-        setSavedOffline(true);
-        setSuccess(true);
+        await savePendingLog(mealType, items, '', logDate);
+        await saveRecentFood(selectedFood);
+        justLoggedRef.current = true;
+        setFlash(`${selectedFood.name} was saved offline. Sync when you are back online.`, 'offline', logDate);
+        router.replace('/(tabs)/dashboard');
       } else {
         const message = err?.response?.data?.message ?? 'Failed to log meal. Please try again.';
         setSubmitError(message);
@@ -135,54 +357,37 @@ export default function LogMealScreen() {
 
   function handleReset() {
     setSelectedFood(null);
+    setServingUnits([]);
+    setSelectedServingUnit(null);
+    setServingUnitsLoading(false);
     setQuantity('1');
     setQuantityUnit('plate');
     setMealType('lunch');
     setSearchQuery('');
+    setFoods([]);
+    setOfflineFoodSearch(false);
     setSubmitError('');
-    setSuccess(false);
-    setSavedOffline(false);
-  }
-
-  // ── Success screen ──────────────────────────────────────────────────────────
-  if (success) {
-    return (
-      <SafeAreaView style={styles.centered}>
-        <Text style={styles.successIcon}>{savedOffline ? '📦' : '✓'}</Text>
-        <Text style={styles.successTitle}>
-          {savedOffline ? 'Saved Offline' : 'Meal Logged!'}
-        </Text>
-        <Text style={styles.successSub}>
-          {savedOffline
-            ? `${selectedFood?.name} was saved locally. Sync when you're back online.`
-            : `${selectedFood?.name} has been added to your ${mealType}.`}
-        </Text>
-        <Pressable
-          style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
-          onPress={() => router.replace('/(tabs)/dashboard')}>
-          <Text style={styles.primaryButtonText}>Go to Dashboard</Text>
-        </Pressable>
-        <Pressable
-          style={({ pressed }) => [styles.ghostButton, pressed && styles.pressed]}
-          onPress={handleReset}>
-          <Text style={styles.ghostButtonText}>Log Another Meal</Text>
-        </Pressable>
-      </SafeAreaView>
-    );
+    setAiStep('none');
+    setAiError('');
   }
 
   // ── Meal options panel (after selecting a food) ─────────────────────────────
   if (selectedFood) {
+    const conventionalUnits = servingUnits.filter((u) => u.unit_type === 'conventional');
+    const unconventionalUnits = servingUnits.filter((u) => u.unit_type === 'unconventional');
+    const gramsPerUnit = selectedServingUnit?.grams ?? null;
+
     return (
       <SafeAreaView style={styles.container}>
         <ScrollView contentContainerStyle={styles.scroll}>
           <Text style={styles.heading}>Log Meal</Text>
+          <Text style={styles.dateBadge}>Logging for: {formatLogDateLabel(logDate)}</Text>
 
-          {/* Selected food summary */}
+          {/* Selected food */}
           <View style={styles.selectedCard}>
             <Text style={styles.selectedName}>{selectedFood.name}</Text>
             <Text style={styles.selectedMacros}>
-              {selectedFood.calories} kcal · C {selectedFood.carbs_g}g · P {selectedFood.protein_g}g · F {selectedFood.fat_g}g
+              Per serving: {selectedFood.calories} kcal · C {selectedFood.carbs_g}g · P {selectedFood.protein_g}g · F {selectedFood.fat_g}g · Fiber {selectedFood.fiber_g}g
             </Text>
           </View>
 
@@ -212,20 +417,76 @@ export default function LogMealScreen() {
             placeholderTextColor="#999"
           />
 
-          {/* Quantity unit picker */}
+          {/* Serving unit picker — dynamic from API, grouped by type */}
           <Text style={styles.label}>Unit</Text>
-          <View style={styles.chipRow}>
-            {QUANTITY_UNITS.map((unit) => (
-              <Pressable
-                key={unit}
-                style={[styles.chip, quantityUnit === unit && styles.chipSelected]}
-                onPress={() => setQuantityUnit(unit)}>
-                <Text style={[styles.chipText, quantityUnit === unit && styles.chipTextSelected]}>
-                  {unit}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
+          {servingUnitsLoading ? (
+            <ActivityIndicator color="#2563EB" size="small" style={{ alignSelf: 'flex-start' }} />
+          ) : servingUnits.length > 0 ? (
+            <>
+              {conventionalUnits.length > 0 && (
+                <>
+                  <Text style={styles.unitGroupLabel}>Conventional</Text>
+                  <View style={styles.chipRow}>
+                    {conventionalUnits.map((u) => (
+                      <Pressable
+                        key={u.id}
+                        style={[styles.chip, selectedServingUnit?.id === u.id && styles.chipSelected]}
+                        onPress={() => {
+                          setSelectedServingUnit(u);
+                          setQuantityUnit(u.unit_name);
+                        }}>
+                        <Text style={[styles.chipText, selectedServingUnit?.id === u.id && styles.chipTextSelected]}>
+                          {u.unit_name}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </>
+              )}
+              {unconventionalUnits.length > 0 && (
+                <>
+                  <Text style={styles.unitGroupLabel}>Unconventional</Text>
+                  <View style={styles.chipRow}>
+                    {unconventionalUnits.map((u) => (
+                      <Pressable
+                        key={u.id}
+                        style={[styles.chip, selectedServingUnit?.id === u.id && styles.chipSelected]}
+                        onPress={() => {
+                          setSelectedServingUnit(u);
+                          setQuantityUnit(u.unit_name);
+                        }}>
+                        <Text style={[styles.chipText, selectedServingUnit?.id === u.id && styles.chipTextSelected]}>
+                          {u.unit_name}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </>
+              )}
+            </>
+          ) : (
+            // Fallback — food has no serving units defined in the database yet
+            <View style={styles.chipRow}>
+              {QUANTITY_UNITS.map((unit) => (
+                <Pressable
+                  key={unit}
+                  style={[styles.chip, quantityUnit === unit && styles.chipSelected]}
+                  onPress={() => setQuantityUnit(unit)}>
+                  <Text style={[styles.chipText, quantityUnit === unit && styles.chipTextSelected]}>
+                    {unit}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          )}
+
+          {/* Live nutrition preview — updates as quantity, unit, and gramsPerUnit change */}
+          <NutritionPreview
+            food={selectedFood}
+            quantity={parseFloat(quantity) || 0}
+            unit={quantityUnit}
+            gramsPerUnit={gramsPerUnit}
+          />
 
           {submitError ? <Text style={styles.error}>{submitError}</Text> : null}
 
@@ -242,7 +503,11 @@ export default function LogMealScreen() {
 
           <Pressable
             style={({ pressed }) => [styles.ghostButton, pressed && styles.pressed]}
-            onPress={() => setSelectedFood(null)}>
+            onPress={() => {
+              setSelectedFood(null);
+              setServingUnits([]);
+              setSelectedServingUnit(null);
+            }}>
             <Text style={styles.ghostButtonText}>← Back to Search</Text>
           </Pressable>
         </ScrollView>
@@ -251,10 +516,15 @@ export default function LogMealScreen() {
   }
 
   // ── Food search panel ───────────────────────────────────────────────────────
+
+  const isShortQuery = searchQuery.trim().length < 2;
+
   return (
     <SafeAreaView style={styles.container}>
+      {/* Fixed search header */}
       <View style={styles.searchHeader}>
         <Text style={styles.heading}>Log Meal</Text>
+        <Text style={styles.dateBadge}>Logging for: {formatLogDateLabel(logDate)}</Text>
         <TextInput
           style={styles.searchInput}
           placeholder="Search food (e.g. jollof rice)"
@@ -264,36 +534,136 @@ export default function LogMealScreen() {
           autoCapitalize="none"
           clearButtonMode="while-editing"
         />
+        {isShortQuery && searchQuery.length === 0
+          ? null
+          : isShortQuery
+            ? <Text style={styles.searchHint}>Type at least 2 characters to search</Text>
+            : null}
       </View>
 
-      {searchLoading && (
+      {/* Content area — conditionally rendered based on search state */}
+
+      {isShortQuery ? (
+        // Empty or very short query — show recent foods
+        <ScrollView contentContainerStyle={styles.list}>
+          {recentFoods.length > 0 ? (
+            <>
+              <Text style={styles.sectionLabel}>Recent</Text>
+              {recentFoods.map((food, i) => (
+                <View key={food.id}>
+                  <Pressable
+                    style={({ pressed }) => [styles.foodCard, pressed && styles.pressed]}
+                    onPress={() => handleSelectFood(food)}>
+                    <View style={styles.foodCardLeft}>
+                      <Text style={styles.foodName}>{food.name}</Text>
+                      {food.serving_unit ? (
+                        <Text style={styles.foodUnit}>per {food.serving_unit}</Text>
+                      ) : null}
+                    </View>
+                    <Text style={styles.foodCalories}>{food.calories} kcal</Text>
+                  </Pressable>
+                  {i < recentFoods.length - 1 && <View style={styles.separator} />}
+                </View>
+              ))}
+            </>
+          ) : (
+            <Text style={styles.emptyText}>Start typing to search for a food item.</Text>
+          )}
+        </ScrollView>
+      ) : searchLoading ? (
         <ActivityIndicator style={{ marginTop: 24 }} color="#2563EB" />
-      )}
-      {searchError ? <Text style={[styles.error, { margin: 20 }]}>{searchError}</Text> : null}
-
-      {!searchLoading && foods.length === 0 && !searchError && (
-        <Text style={styles.emptyText}>No foods found.</Text>
-      )}
-
-      <FlatList
-        data={foods}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.list}
-        renderItem={({ item }) => (
-          <Pressable
-            style={({ pressed }) => [styles.foodCard, pressed && styles.pressed]}
-            onPress={() => setSelectedFood(item)}>
-            <View style={styles.foodCardLeft}>
-              <Text style={styles.foodName}>{item.name}</Text>
-              {item.serving_unit ? (
-                <Text style={styles.foodUnit}>per {item.serving_unit}</Text>
-              ) : null}
+      ) : searchError ? (
+        <Text style={[styles.error, { margin: 20 }]}>{searchError}</Text>
+      ) : foods.length > 0 ? (
+        // Search results — online or offline cached
+        <FlatList
+          data={foods}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.list}
+          ListHeaderComponent={
+            offlineFoodSearch ? (
+              <Text style={styles.offlineBanner}>Showing saved offline foods</Text>
+            ) : null
+          }
+          renderItem={({ item }) => (
+            <Pressable
+              style={({ pressed }) => [styles.foodCard, pressed && styles.pressed]}
+              onPress={() => handleSelectFood(item)}>
+              <View style={styles.foodCardLeft}>
+                <Text style={styles.foodName}>{item.name}</Text>
+                {item.serving_unit ? (
+                  <Text style={styles.foodUnit}>per {item.serving_unit}</Text>
+                ) : null}
+              </View>
+              <Text style={styles.foodCalories}>{item.calories} kcal</Text>
+            </Pressable>
+          )}
+          ItemSeparatorComponent={() => <View style={styles.separator} />}
+        />
+      ) : aiStep === 'confirm' ? (
+        // Confirmation card — shown before making the AI call
+        <ScrollView contentContainerStyle={[styles.list, { paddingTop: 16 }]}>
+          <View style={styles.aiCard}>
+            <Text style={styles.aiCardTitle}>Search with AI</Text>
+            <Text style={styles.aiCardBody}>
+              AI will estimate nutrition for "{searchQuery.trim()}". Results may not be exact.
+            </Text>
+            <View style={styles.aiCardRow}>
+              <Pressable
+                style={({ pressed }) => [styles.aiCancelButton, pressed && styles.pressed]}
+                onPress={() => setAiStep('none')}>
+                <Text style={styles.aiCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.aiConfirmButton, pressed && styles.pressed]}
+                onPress={handleAiSearch}>
+                <Text style={styles.aiConfirmText}>Search with AI</Text>
+              </Pressable>
             </View>
-            <Text style={styles.foodCalories}>{item.calories} kcal</Text>
+          </View>
+        </ScrollView>
+      ) : aiStep === 'loading' ? (
+        // Loading state while AI estimates nutrition
+        <ScrollView contentContainerStyle={[styles.list, { paddingTop: 16 }]}>
+          <View style={styles.aiCard}>
+            <ActivityIndicator color="#7C3AED" style={{ marginBottom: 8 }} />
+            <Text style={[styles.aiCardBody, { textAlign: 'center' }]}>
+              Estimating nutrition...
+            </Text>
+          </View>
+        </ScrollView>
+      ) : aiStep === 'error' ? (
+        // Error state — AI failed, limit reached, or low-confidence result
+        <ScrollView contentContainerStyle={[styles.list, { paddingTop: 16 }]}>
+          <View style={styles.aiCard}>
+            <Text style={[styles.error, { textAlign: 'left', marginBottom: 8 }]}>{aiError}</Text>
+            <Pressable
+              style={({ pressed }) => [styles.aiCancelButton, pressed && styles.pressed]}
+              onPress={() => setAiStep('none')}>
+              <Text style={styles.aiCancelText}>← Back to search</Text>
+            </Pressable>
+          </View>
+        </ScrollView>
+      ) : offlineFoodSearch ? (
+        // Offline, no cached matches — do not offer AI (requires internet)
+        <ScrollView contentContainerStyle={[styles.list, { paddingTop: 16 }]}>
+          <Text style={styles.noResultsText}>
+            No saved offline food found. Connect to the internet to search more foods.
+          </Text>
+        </ScrollView>
+      ) : (
+        // Online, no results — prompt the user to try AI
+        <ScrollView contentContainerStyle={[styles.list, { paddingTop: 16 }]}>
+          <Text style={styles.noResultsText}>
+            No food found for "{searchQuery.trim()}".
+          </Text>
+          <Pressable
+            style={({ pressed }) => [styles.aiButton, pressed && styles.pressed]}
+            onPress={() => setAiStep('confirm')}>
+            <Text style={styles.aiButtonText}>Search with AI</Text>
           </Pressable>
-        )}
-        ItemSeparatorComponent={() => <View style={styles.separator} />}
-      />
+        </ScrollView>
+      )}
     </SafeAreaView>
   );
 }
@@ -305,14 +675,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#fff',
   },
-  centered: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    gap: 12,
-    backgroundColor: '#fff',
-  },
   scroll: {
     paddingHorizontal: 20,
     paddingTop: 24,
@@ -322,11 +684,16 @@ const styles = StyleSheet.create({
   searchHeader: {
     paddingHorizontal: 20,
     paddingTop: 24,
-    gap: 12,
+    gap: 10,
   },
   heading: {
     fontSize: 22,
     fontWeight: 'bold',
+  },
+  dateBadge: {
+    fontSize: 13,
+    color: '#555',
+    marginBottom: 2,
   },
   searchInput: {
     borderWidth: 1,
@@ -336,10 +703,24 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#000',
   },
+  searchHint: {
+    fontSize: 12,
+    color: '#aaa',
+    marginTop: -4,
+  },
   list: {
     paddingHorizontal: 20,
     paddingTop: 12,
     paddingBottom: 40,
+  },
+  sectionLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#aaa',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+    marginTop: 4,
   },
   foodCard: {
     flexDirection: 'row',
@@ -375,6 +756,80 @@ const styles = StyleSheet.create({
     marginTop: 40,
     fontSize: 14,
   },
+  noResultsText: {
+    textAlign: 'center',
+    color: '#555',
+    fontSize: 14,
+    marginBottom: 16,
+  },
+  offlineBanner: {
+    fontSize: 12,
+    color: '#92400E',
+    backgroundColor: '#FEF3C7',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  aiButton: {
+    backgroundColor: '#7C3AED',
+    borderRadius: 8,
+    padding: 12,
+    alignItems: 'center',
+    marginHorizontal: 40,
+  },
+  aiButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  aiCard: {
+    backgroundColor: '#F5F3FF',
+    borderRadius: 10,
+    padding: 16,
+    gap: 12,
+  },
+  aiCardTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#5B21B6',
+  },
+  aiCardBody: {
+    fontSize: 14,
+    color: '#4C1D95',
+    lineHeight: 20,
+  },
+  aiCardRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  aiCancelButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#ccc',
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: 'center',
+    backgroundColor: '#fff',
+  },
+  aiCancelText: {
+    color: '#333',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  aiConfirmButton: {
+    flex: 1,
+    backgroundColor: '#7C3AED',
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  aiConfirmText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 14,
+  },
   selectedCard: {
     backgroundColor: '#EFF6FF',
     borderRadius: 10,
@@ -386,7 +841,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   selectedMacros: {
-    fontSize: 13,
+    fontSize: 12,
     color: '#555',
   },
   label: {
@@ -394,6 +849,15 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#333',
     marginTop: 4,
+  },
+  unitGroupLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#aaa',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginTop: 4,
+    marginBottom: 2,
   },
   chipRow: {
     flexDirection: 'row',
@@ -453,20 +917,6 @@ const styles = StyleSheet.create({
     color: '#c0392b',
     fontSize: 13,
     textAlign: 'center',
-  },
-  successIcon: {
-    fontSize: 48,
-    color: '#16a34a',
-  },
-  successTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-  },
-  successSub: {
-    fontSize: 14,
-    color: '#555',
-    textAlign: 'center',
-    marginBottom: 8,
   },
   pressed: {
     opacity: 0.7,

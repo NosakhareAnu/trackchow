@@ -1,10 +1,14 @@
 import axios from 'axios';
 import { getToken } from './auth-storage';
 
-// Change this to your machine's local IP address when testing on a physical device.
-// e.g. 'http://192.168.1.x:5000'
-// Leave as localhost when using an Android emulator with 10.0.2.2, or iOS simulator.
-const BASE_URL = 'http://localhost:5000';
+// Update BASE_URL to match your environment:
+//   Expo web on laptop  → 'http://localhost:5000'           (browser on the same machine)
+//   Android Emulator    → 'http://10.0.2.2:5000'           (localhost does NOT work on Android emulator)
+//   Physical Android    → use the laptop's LAN IPv4 address (e.g. 'http://192.168.x.x:5000')
+//
+// Current setting: physical Android phone testing via Expo Go.
+// Laptop is reachable from the phone at http://10.203.208.196:5000
+const BASE_URL = 'http://10.203.208.196:5000';
 
 const api = axios.create({
   baseURL: BASE_URL,

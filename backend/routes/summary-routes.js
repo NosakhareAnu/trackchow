@@ -7,15 +7,18 @@ const router = express.Router();
 // All routes in this file require a valid Bearer token
 router.use(authMiddleware);
 
-// GET /summary/daily
-// Returns today's total nutrition for the current user
+// GET /summary/daily?date=YYYY-MM-DD (optional, defaults to today)
+// Returns total nutrition for the current user on the given date
 router.get('/daily', async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // Build today's date range in ISO format (UTC)
-    const today = new Date();
-    const dateStr = today.toISOString().split('T')[0]; // e.g. "2026-06-08"
+    const dateStr = req.query.date || new Date().toISOString().split('T')[0];
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+      return res.status(400).json({ success: false, message: 'Invalid date format. Use YYYY-MM-DD' });
+    }
+
     const startOfDay = `${dateStr}T00:00:00.000Z`;
     const endOfDay = `${dateStr}T23:59:59.999Z`;
 
